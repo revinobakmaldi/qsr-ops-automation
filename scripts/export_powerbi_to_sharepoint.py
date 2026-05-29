@@ -62,6 +62,8 @@ def main() -> None:
 
     for job in jobs:
         print(f"Exporting {job.export_key}...")
+        for filter_value in job.filters:
+            print(f"  filter: {filter_value}")
         pdf = powerbi.export_report_pdf(job)
         item = sharepoint.upload_file(sharepoint.output_folder, job.output_filename, pdf)
         print(f"Uploaded {job.output_filename}: {item.get('webUrl', item.get('id'))}")

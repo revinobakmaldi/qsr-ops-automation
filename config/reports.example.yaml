@@ -10,7 +10,7 @@ powerbi_reports:
     business_date_filter:
       table: "Mapping_Date"
       column: "DateOfBusiness"
-      template: "{table}/{column} eq {business_date}"
+      template: "{table}/{column} eq {business_date_datetime}"
     filters: []
     export_groups:
       - key: "national"

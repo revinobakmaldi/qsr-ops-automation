@@ -148,4 +148,5 @@ def _render_business_date_filter(date_filter, business_date: str) -> str:
         table=date_filter.table,
         column=date_filter.column,
         business_date=business_date,
+        business_date_datetime=f"datetime'{business_date}T00:00:00'",
     )
