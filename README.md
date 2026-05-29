@@ -74,6 +74,33 @@ report_delivery:
     message: "Hi, your {report_name} PDF is ready: <a href=\"{web_url}\">{file_name}</a>"
 ```
 
+## Known limitations & lessons learned
+
+### Power BI ExportTo API does NOT work for these cases
+
+| Situation | What happens | Fix |
+|---|---|---|
+| Report has HTML content visuals | ExportTo renders "This visual does not support exporting" in PDF | Use Puppeteer PDF path (`export_report_pdf.js`) |
+| Date filters are slicers with Edit Interactions | `reportLevelFilters` bypasses edit interactions — wrong visuals get filtered | Use Puppeteer `setSlicerState()` which respects interactions |
+| Slicer has a saved default selection | API filter + slicer default = empty intersection = No Data | Clear slicer defaults in the report, or use Puppeteer |
+| `defaultBookmark.state` constructed manually | ExportTo rejects all manually built states — format is SDK-only, undocumented | Use `capture_slicer_state.js` to capture a real state via the JS SDK |
+
+### Filter rules
+
+- **Filter pane fields** (e.g., regional filter): use `reportLevelFilters` — works correctly.
+- **Slicer fields** (e.g., date slicers with edit interactions): use Puppeteer `setSlicerState()` — only way to respect edit interactions.
+- **Date values sent to `setSlicerState`**: send date-only strings (`2026-05-25`, not `2026-05-25T00:00:00`) — the browser timezone (UTC+7) shifts datetime values to the wrong UTC day.
+- **Finding the right slicer**: match by `getSlicerState().targets` (table/column), not by visual name — the JS SDK `visual.name` is a GUID, not the Selection pane display name.
+- **Non-active pages**: call `report.setPage(pageName)` before setting slicers on that page — inactive page visuals throw errors.
+
+### When to use Puppeteer vs ExportTo
+
+| Report has... | Use |
+|---|---|
+| HTML content visuals | Puppeteer (`export_report_pdf.js`) |
+| Date slicers with edit interactions | Puppeteer |
+| Only filter-pane filters, no HTML visuals | ExportTo API (faster, no Node.js needed) |
+
 ## Microsoft API references
 
 - Power BI `ExportTo` starts an async export job and supports `reportLevelFilters`.
