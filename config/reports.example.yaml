@@ -1,0 +1,72 @@
+sharepoint:
+  folder_url: "https://tenant.sharepoint.com/sites/DataTeam/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FDataTeam%2FShared%20Documents%2FFolder"
+
+powerbi_reports:
+  - key: "sales_daily"
+    report_name: "Daily Sales"
+    workspace_id: "00000000-0000-0000-0000-000000000000"
+    report_id: "00000000-0000-0000-0000-000000000000"
+    output_filename: "{report_name}_{level_key}_{value_key}_{business_date}.pdf"
+    business_date_filter:
+      table: "Mapping_Date"
+      column: "DateOfBusiness"
+      template: "{table}/{column} eq {business_date}"
+    filters: []
+    export_groups:
+      - key: "national"
+        display_name: "National"
+        page_name: "ReportSectionNational"
+        values:
+          - key: "national"
+            label: "National"
+
+      - key: "regional"
+        display_name: "Regional"
+        page_name: "ReportSectionRegional"
+        filter_templates:
+          - "Geography/Region eq '{value}'"
+        values:
+          - key: "west"
+            label: "West"
+            value: "West"
+          - key: "east"
+            label: "East"
+            value: "East"
+
+      - key: "area"
+        display_name: "Area"
+        page_name: "ReportSectionArea"
+        filter_templates:
+          - "Geography/Area eq '{value}'"
+        values:
+          - key: "area_01"
+            label: "Area 01"
+            value: "Area 01"
+          - key: "area_02"
+            label: "Area 02"
+            value: "Area 02"
+
+      - key: "store"
+        display_name: "Store"
+        page_name: "ReportSectionStore"
+        filter_templates:
+          - "Store/StoreCode eq '{value}'"
+        values:
+          - key: "s001"
+            label: "Store 001"
+            value: "S001"
+          - key: "s002"
+            label: "Store 002"
+            value: "S002"
+
+report_delivery:
+  # export_key format: {report_key}.{export_group_key}.{value_key}
+  - export_key: "sales_daily.national.national"
+    channel: "email"
+    recipient_upn: "person@company.com"
+    subject: "{report_name} PDF is ready"
+    message: "Hi, your {report_name} PDF is ready: <a href=\"{web_url}\">{file_name}</a>"
+  - export_key: "sales_daily.regional.west"
+    channel: "teams"
+    recipient_upn: "west.manager@company.com"
+    message: "Hi, your {report_name} PDF is ready: <a href=\"{web_url}\">{file_name}</a>"
