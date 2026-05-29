@@ -5,3 +5,5 @@ __pycache__/
 .token_cache.bin
 .env
 config/reports.yaml
+scripts/node_modules/
+scripts/package-lock.json

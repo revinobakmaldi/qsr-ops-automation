@@ -35,6 +35,7 @@ class DateFilter:
     column: str
     template: str = "{table}/{column} eq {business_date}"
     value: str = "business_date"
+    slicer_name: str | None = None
 
 
 @dataclass(frozen=True)

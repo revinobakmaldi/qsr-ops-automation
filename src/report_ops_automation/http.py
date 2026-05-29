@@ -14,8 +14,17 @@ class ApiClient:
 
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         url = path if path.startswith("https://") else f"{self.base_url}/{path.lstrip('/')}"
+        last_exc: Exception | None = None
         for attempt in range(6):
-            response = self.session.request(method, url, timeout=120, **kwargs)
+            try:
+                response = self.session.request(method, url, timeout=120, **kwargs)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                last_exc = exc
+                delay = min(2 ** attempt, 30)
+                print(f"Network error (attempt {attempt + 1}/6), retrying in {delay}s: {exc}")
+                time.sleep(delay)
+                continue
+
             if response.status_code not in {429, 500, 502, 503, 504}:
                 self._raise_for_error(response)
                 return response
@@ -24,6 +33,8 @@ class ApiClient:
             delay = int(retry_after) if retry_after and retry_after.isdigit() else min(2**attempt, 30)
             time.sleep(delay)
 
+        if last_exc:
+            raise last_exc
         self._raise_for_error(response)
         return response
 

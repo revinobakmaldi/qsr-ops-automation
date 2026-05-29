@@ -1,0 +1,9 @@
+{
+  "name": "capture-slicer-state",
+  "version": "1.0.0",
+  "description": "Capture Power BI slicer states for ExportTo API bookmark state",
+  "main": "capture_slicer_state.js",
+  "dependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}

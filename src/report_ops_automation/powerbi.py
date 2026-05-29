@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
+import json
 import time
 from typing import Any
 
 from .config import ExportGroup, ExportValue, PowerBIReport
-from .exports import ExportJob
+from .exports import ExportJob, SlicerOverride
 from .http import ApiClient
 
 
@@ -12,9 +14,20 @@ class PowerBIClient:
     def __init__(self, token: str):
         self.api = ApiClient(token, "https://api.powerbi.com/v1.0/myorg")
 
-    def export_report_pdf(self, job: ExportJob, poll_seconds: int = 5, timeout_seconds: int = 900) -> bytes:
+    def export_report_pdf(
+        self,
+        job: ExportJob,
+        poll_seconds: int = 5,
+        timeout_seconds: int = 900,
+        filter_level: str = "report",
+        debug: bool = False,
+    ) -> bytes:
         report = job.report
-        payload = _export_payload(job, self._page_name_map(report))
+        page_name_map = self._page_name_map(report)
+        payload = _export_payload(job, page_name_map, filter_level=filter_level)
+        if debug:
+            import json
+            print(f"[debug] ExportTo payload:\n{json.dumps(payload, indent=2)}")
         export_job = self.api.post_json(
             f"/groups/{report.workspace_id}/reports/{report.report_id}/ExportTo",
             payload,
@@ -76,6 +89,11 @@ class PowerBIClient:
                 )
         return values
 
+    def list_bookmarks(self, report: PowerBIReport) -> list[dict]:
+        return self.api.get_json(
+            f"/groups/{report.workspace_id}/reports/{report.report_id}/bookmarks"
+        ).get("value", [])
+
     def _page_name_map(self, report: PowerBIReport) -> dict[str, str]:
         pages = self.api.get_json(f"/groups/{report.workspace_id}/reports/{report.report_id}/pages").get("value", [])
         mapping: dict[str, str] = {}
@@ -89,16 +107,39 @@ class PowerBIClient:
         return mapping
 
 
-def _export_payload(job: ExportJob, page_name_map: dict[str, str] | None = None) -> dict[str, Any]:
+def _export_payload(
+    job: ExportJob,
+    page_name_map: dict[str, str] | None = None,
+    filter_level: str = "report",
+) -> dict[str, Any]:
     report = job.report
     config: dict[str, Any] = {
         "settings": {"includeHiddenPages": False},
     }
-    if job.filters:
-        config["reportLevelFilters"] = [{"filter": " and ".join(f"({value})" for value in job.filters)}]
+    if report.dataset_id:
+        config["datasetToBind"] = report.dataset_id
+
+    resolved_pages = None
     if job.pages:
-        config["pages"] = [_resolve_page(page, page_name_map or {}) for page in job.pages]
-    if report.bookmark_state:
+        resolved_pages = [_resolve_page(page, page_name_map or {}) for page in job.pages]
+        config["pages"] = resolved_pages
+
+    if job.filters:
+        filter_expr = " and ".join(job.filters)
+        if filter_level == "page" and resolved_pages:
+            config["pageLevelFilters"] = [
+                {"pageName": p["pageName"], "filter": filter_expr}
+                for p in resolved_pages
+            ]
+        else:
+            config["reportLevelFilters"] = [{"filter": filter_expr}]
+
+    if job.captured_bookmark_state:
+        config["defaultBookmark"] = {"state": job.captured_bookmark_state}
+    elif job.slicer_overrides:
+        page_ids = [p["pageName"] for p in resolved_pages] if resolved_pages else list(set((page_name_map or {}).values()))
+        config["defaultBookmark"] = {"state": _build_slicer_state(job.slicer_overrides, page_ids)}
+    elif report.bookmark_state:
         config["defaultBookmark"] = {"state": report.bookmark_state}
     if report.locale:
         config["settings"]["locale"] = report.locale
@@ -132,6 +173,34 @@ SELECTCOLUMNS(
 )
 ORDER BY [Value]
 """.strip()
+
+
+def _build_slicer_state(slicer_overrides: list[SlicerOverride], page_ids: list[str]) -> str:
+    visual_containers = {
+        override.slicer_name: {
+            "filters": json.dumps([{
+                "$schema": "http://powerbi.com/product/schema#basic",
+                "target": {"table": override.table, "column": override.column},
+                "operator": "In",
+                "values": [override.value],
+                "filterType": 1,
+                "requireSingleSelection": False,
+            }]),
+            "singleVisualGroup": {},
+        }
+        for override in slicer_overrides
+    }
+    active = page_ids[0] if page_ids else ""
+    state = {
+        "explorationState": {
+            "activeSection": active,
+            "sections": {
+                page_id: {"visualContainers": visual_containers}
+                for page_id in page_ids
+            },
+        }
+    }
+    return base64.b64encode(json.dumps(state).encode()).decode()
 
 
 def _value_to_key(value: str, prefix: str | None = None) -> str:

@@ -8,6 +8,14 @@ from .config import AppConfig, ExportGroup, ExportValue, PowerBIReport
 
 
 @dataclass(frozen=True)
+class SlicerOverride:
+    slicer_name: str
+    table: str
+    column: str
+    value: str
+
+
+@dataclass(frozen=True)
 class ExportJob:
     export_key: str
     report: PowerBIReport
@@ -17,6 +25,8 @@ class ExportJob:
     output_filename: str
     pages: list[dict]
     filters: list[str]
+    slicer_overrides: list[SlicerOverride]
+    captured_bookmark_state: str | None = None
 
 
 def iter_export_jobs(
@@ -30,10 +40,17 @@ def iter_export_jobs(
     jobs: list[ExportJob] = []
     for report in config.powerbi_reports:
         base_filters = [*report.filters]
+        base_slicer_overrides: list[SlicerOverride] = []
         if report.date_filters:
-            base_filters.extend(_render_date_filters(report.date_filters, rendered_business_date))
+            df_strings, df_slicers = _render_date_filters(report.date_filters, rendered_business_date)
+            base_filters.extend(df_strings)
+            base_slicer_overrides.extend(df_slicers)
         elif report.business_date_filter:
-            base_filters.append(_render_business_date_filter(report.business_date_filter, rendered_business_date))
+            bdf = report.business_date_filter
+            if bdf.slicer_name:
+                base_slicer_overrides.append(_render_date_slicer(bdf, rendered_business_date))
+            else:
+                base_filters.append(_render_date_filter(bdf, rendered_business_date))
         if not report.export_groups:
             jobs.append(
                 ExportJob(
@@ -50,6 +67,7 @@ def iter_export_jobs(
                     ),
                     pages=report.pages,
                     filters=base_filters,
+                    slicer_overrides=base_slicer_overrides,
                 )
             )
             continue
@@ -80,6 +98,7 @@ def iter_export_jobs(
                         ),
                         pages=[{"pageName": group.page_name}],
                         filters=filters,
+                        slicer_overrides=base_slicer_overrides,
                     )
                 )
     return jobs
@@ -145,16 +164,17 @@ def escape_filter_value(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _render_business_date_filter(date_filter, business_date: str) -> str:
-    return _render_date_filter(date_filter, business_date)
-
-
-def _render_date_filters(date_filters, business_date: str) -> list[str]:
-    filters = []
+def _render_date_filters(date_filters, business_date: str) -> tuple[list[str], list[SlicerOverride]]:
+    filter_strings: list[str] = []
+    slicer_overrides: list[SlicerOverride] = []
     for date_filter in [date_filters.daily, date_filters.weekly, date_filters.monthly]:
-        if date_filter:
-            filters.append(_render_date_filter(date_filter, business_date))
-    return filters
+        if not date_filter:
+            continue
+        if date_filter.slicer_name:
+            slicer_overrides.append(_render_date_slicer(date_filter, business_date))
+        else:
+            filter_strings.append(_render_date_filter(date_filter, business_date))
+    return filter_strings, slicer_overrides
 
 
 def _render_date_filter(date_filter, business_date: str) -> str:
@@ -170,6 +190,23 @@ def _render_date_filter(date_filter, business_date: str) -> str:
         month_datetime=values["month_datetime"],
         value=escape_filter_value(selected_value),
         value_raw=selected_value,
+    )
+
+
+def _render_date_slicer(date_filter, business_date: str) -> SlicerOverride:
+    values = _date_values(business_date)
+    raw = values[date_filter.value]
+    # Strip OData datetime wrapper
+    if raw.startswith("datetime'") and raw.endswith("'"):
+        raw = raw[9:-1]
+    # Strip time component to avoid browser UTC timezone conversion
+    if "T" in raw:
+        raw = raw.split("T")[0]
+    return SlicerOverride(
+        slicer_name=date_filter.slicer_name,
+        table=date_filter.table,
+        column=date_filter.column,
+        value=raw,
     )
 
 
