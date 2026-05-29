@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from .config import AppConfig, ExportGroup, ExportValue, PowerBIReport
 
@@ -30,7 +30,9 @@ def iter_export_jobs(
     jobs: list[ExportJob] = []
     for report in config.powerbi_reports:
         base_filters = [*report.filters]
-        if report.business_date_filter:
+        if report.date_filters:
+            base_filters.extend(_render_date_filters(report.date_filters, rendered_business_date))
+        elif report.business_date_filter:
             base_filters.append(_render_business_date_filter(report.business_date_filter, rendered_business_date))
         if not report.export_groups:
             jobs.append(
@@ -144,9 +146,42 @@ def escape_filter_value(value: str) -> str:
 
 
 def _render_business_date_filter(date_filter, business_date: str) -> str:
+    return _render_date_filter(date_filter, business_date)
+
+
+def _render_date_filters(date_filters, business_date: str) -> list[str]:
+    filters = []
+    for date_filter in [date_filters.daily, date_filters.weekly, date_filters.monthly]:
+        if date_filter:
+            filters.append(_render_date_filter(date_filter, business_date))
+    return filters
+
+
+def _render_date_filter(date_filter, business_date: str) -> str:
+    values = _date_values(business_date)
+    selected_value = values[date_filter.value]
     return date_filter.template.format(
         table=date_filter.table,
         column=date_filter.column,
         business_date=business_date,
-        business_date_datetime=f"datetime'{business_date}T00:00:00'",
+        business_date_datetime=values["business_date_datetime"],
+        week_month_year=escape_filter_value(values["week_month_year"]),
+        month_date=values["month_date"],
+        month_datetime=values["month_datetime"],
+        value=escape_filter_value(selected_value),
+        value_raw=selected_value,
     )
+
+
+def _date_values(business_date: str) -> dict[str, str]:
+    parsed = datetime.strptime(business_date, "%Y-%m-%d").date()
+    week_number = ((parsed.day - 1) // 7) + 1
+    month_label = parsed.strftime("%b")
+    month_date = parsed.replace(day=1).isoformat()
+    return {
+        "business_date": business_date,
+        "business_date_datetime": f"datetime'{business_date}T00:00:00'",
+        "week_month_year": f"Week {week_number} {month_label} {parsed.year}",
+        "month_date": month_date,
+        "month_datetime": f"datetime'{month_date}T00:00:00'",
+    }

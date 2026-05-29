@@ -30,10 +30,18 @@ class ValueSource:
 
 
 @dataclass(frozen=True)
-class BusinessDateFilter:
+class DateFilter:
     table: str
     column: str
     template: str = "{table}/{column} eq {business_date}"
+    value: str = "business_date"
+
+
+@dataclass(frozen=True)
+class DateFilters:
+    daily: DateFilter | None = None
+    weekly: DateFilter | None = None
+    monthly: DateFilter | None = None
 
 
 @dataclass(frozen=True)
@@ -55,11 +63,13 @@ class PowerBIReport:
     workspace_id: str
     report_id: str
     output_filename: str
+    dataset_id: str | None = None
     filters: list[str] = field(default_factory=list)
     pages: list[dict[str, Any]] = field(default_factory=list)
     bookmark_state: str | None = None
     locale: str | None = None
-    business_date_filter: BusinessDateFilter | None = None
+    business_date_filter: DateFilter | None = None
+    date_filters: DateFilters | None = None
     export_groups: list[ExportGroup] = field(default_factory=list)
 
 
@@ -126,8 +136,26 @@ def _parse_report(data: dict[str, Any]) -> PowerBIReport:
         )
         for group in data.get("export_groups", [])
     ]
-    report_data = {key: value for key, value in data.items() if key not in {"export_groups", "business_date_filter"}}
+    report_data = {
+        key: value
+        for key, value in data.items()
+        if key not in {"export_groups", "business_date_filter", "date_filters"}
+    }
     business_date_filter = (
-        BusinessDateFilter(**data["business_date_filter"]) if data.get("business_date_filter") else None
+        DateFilter(**data["business_date_filter"]) if data.get("business_date_filter") else None
     )
-    return PowerBIReport(**report_data, business_date_filter=business_date_filter, export_groups=groups)
+    date_filters = (
+        DateFilters(
+            daily=DateFilter(**data["date_filters"]["daily"]) if data["date_filters"].get("daily") else None,
+            weekly=DateFilter(**data["date_filters"]["weekly"]) if data["date_filters"].get("weekly") else None,
+            monthly=DateFilter(**data["date_filters"]["monthly"]) if data["date_filters"].get("monthly") else None,
+        )
+        if data.get("date_filters")
+        else None
+    )
+    return PowerBIReport(
+        **report_data,
+        business_date_filter=business_date_filter,
+        date_filters=date_filters,
+        export_groups=groups,
+    )

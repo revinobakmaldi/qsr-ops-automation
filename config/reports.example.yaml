@@ -6,11 +6,24 @@ powerbi_reports:
     report_name: "Daily Sales"
     workspace_id: "00000000-0000-0000-0000-000000000000"
     report_id: "00000000-0000-0000-0000-000000000000"
+    dataset_id: "00000000-0000-0000-0000-000000000000"
     output_filename: "{report_name}_{level_key}_{value_key}_{business_date}.pdf"
-    business_date_filter:
-      table: "Mapping_Date"
-      column: "DateOfBusiness"
-      template: "{table}/{column} eq {business_date_datetime}"
+    date_filters:
+      daily:
+        table: "Mapping_Date"
+        column: "DateOfBusiness"
+        template: "{table}/{column} eq {business_date_datetime}"
+        value: "business_date_datetime"
+      weekly:
+        table: "Map_Week_Only"
+        column: "WeekMonthYear"
+        template: "{table}/{column} eq '{week_month_year}'"
+        value: "week_month_year"
+      monthly:
+        table: "Mapping_Date"
+        column: "MonthMap"
+        template: "{table}/{column} eq {month_datetime}"
+        value: "month_datetime"
     filters: []
     export_groups:
       - key: "national"

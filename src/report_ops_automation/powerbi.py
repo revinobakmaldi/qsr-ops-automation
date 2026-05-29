@@ -37,6 +37,8 @@ class PowerBIClient:
         raise TimeoutError(f"Timed out waiting for Power BI export: {job.export_key}")
 
     def get_report_dataset_id(self, report: PowerBIReport) -> str:
+        if report.dataset_id:
+            return report.dataset_id
         payload = self.api.get_json(f"/groups/{report.workspace_id}/reports/{report.report_id}")
         dataset_id = payload.get("datasetId")
         if not dataset_id:
@@ -50,7 +52,7 @@ class PowerBIClient:
         dataset_id = self.get_report_dataset_id(report)
         query = _distinct_values_dax(source.table, source.column)
         payload = self.api.post_json(
-            f"/groups/{report.workspace_id}/datasets/{dataset_id}/executeQueries",
+            f"/datasets/{dataset_id}/executeQueries",
             {
                 "queries": [{"query": query}],
                 "serializerSettings": {"includeNulls": False},
@@ -93,7 +95,7 @@ def _export_payload(job: ExportJob, page_name_map: dict[str, str] | None = None)
         "settings": {"includeHiddenPages": False},
     }
     if job.filters:
-        config["reportLevelFilters"] = [{"filter": value} for value in job.filters]
+        config["reportLevelFilters"] = [{"filter": " and ".join(f"({value})" for value in job.filters)}]
     if job.pages:
         config["pages"] = [_resolve_page(page, page_name_map or {}) for page in job.pages]
     if report.bookmark_state:
