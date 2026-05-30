@@ -89,7 +89,7 @@ report_delivery:
 
 - **Filter pane fields** (e.g., regional filter): use `reportLevelFilters` — works correctly.
 - **Slicer fields** (e.g., date slicers with edit interactions): use Puppeteer `setSlicerState()` — only way to respect edit interactions.
-- **Date values sent to `setSlicerState`**: send date-only strings (`2026-05-25`, not `2026-05-25T00:00:00`) — the browser timezone (UTC+7) shifts datetime values to the wrong UTC day.
+- **Date values sent to `setSlicerState`**: send the full datetime string **without** a timezone suffix (`2026-05-25T00:00:00`). Power BI stores dates as local-midnight-in-UTC (e.g. May 25 00:00 WIB = `2026-05-24T17:00:00.000Z`). The browser (WIB = UTC+7) converts the timezone-naive string to the correct UTC value automatically. Do NOT strip the time component — passing a date-only string (`2026-05-25`) makes Power BI treat it as UTC midnight, which is 7 hours off and matches no rows. Do NOT add a `Z` suffix — that bypasses the browser conversion and also lands on the wrong UTC value.
 - **Finding the right slicer**: match by `getSlicerState().targets` (table/column), not by visual name — the JS SDK `visual.name` is a GUID, not the Selection pane display name.
 - **Non-active pages**: call `report.setPage(pageName)` before setting slicers on that page — inactive page visuals throw errors.
 
