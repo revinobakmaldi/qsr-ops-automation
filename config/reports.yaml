@@ -43,7 +43,6 @@ powerbi_reports:
         values_from:
           table: "Mapping_Resto_RFID"
           column: "RegionOperational"
-          key_prefix: "region"
 
       - key: "area"
         display_name: "Area"
@@ -53,7 +52,6 @@ powerbi_reports:
         values_from:
           table: "Mapping_Resto_RFID"
           column: "AreaOperational"
-          key_prefix: "area"
 
       - key: "store"
         display_name: "Store"
@@ -63,6 +61,5 @@ powerbi_reports:
         values_from:
           table: "Mapping_Resto_RFID"
           column: "StoreID"
-          key_prefix: "store"
 
 report_delivery: []
