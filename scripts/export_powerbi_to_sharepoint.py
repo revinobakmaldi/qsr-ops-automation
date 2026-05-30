@@ -39,6 +39,11 @@ def main() -> None:
         default=[],
         help="Export only this generated key. Can be passed more than once.",
     )
+    parser.add_argument(
+        "--export-key-file",
+        default=None,
+        help="Path to a file with one export key per line. Merged with --export-key. Use to retry a failed_*.txt file.",
+    )
     parser.add_argument("--max-jobs", type=int, default=0, help="Stop after this many export jobs.")
     parser.add_argument(
         "--filter-mode",
@@ -83,7 +88,12 @@ def main() -> None:
         _print_bookmarks(config, powerbi)
         return
 
-    jobs = select_jobs(config, powerbi, args.run_date, args.business_date, set(args.export_key))
+    export_keys = list(args.export_key)
+    if args.export_key_file:
+        with open(args.export_key_file) as f:
+            export_keys += [line.strip() for line in f if line.strip()]
+
+    jobs = select_jobs(config, powerbi, args.run_date, args.business_date, set(export_keys))
     if args.max_jobs:
         jobs = jobs[: args.max_jobs]
     if not jobs:
@@ -95,11 +105,17 @@ def main() -> None:
     use_puppeteer = pdf_script and pdf_script.exists()
 
     if use_puppeteer:
-        _run_puppeteer_exports(
+        failed = _run_puppeteer_exports(
             jobs, str(pdf_script), config.sharepoint, sp_token_early,
             workers=args.workers,
             render_wait_ms=int(args.render_wait * 1000),
         )
+        if failed:
+            from datetime import datetime
+            fname = f"failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            Path(fname).write_text("\n".join(failed) + "\n")
+            print(f"{len(failed)} job(s) failed. Keys saved to {fname} — retry with --export-key-file {fname}")
+            raise SystemExit(1)
         return
 
     if args.node_script:
@@ -288,8 +304,7 @@ def _run_puppeteer_exports(
                         print(f"[w{worker_id}] crashed: {e}")
                         all_failed.append(f"worker-{worker_id}-crash")
 
-    if all_failed:
-        raise RuntimeError(f"{len(all_failed)} job(s) failed: {', '.join(all_failed)}")
+    return all_failed
 
 
 def _inject_captured_states(jobs, node_script: str):
