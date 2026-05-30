@@ -58,6 +58,13 @@ def main() -> None:
         help="Apply filters at report level (default) or page level via pageLevelFilters.",
     )
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel export workers.")
+    parser.add_argument(
+        "--on-missing-date",
+        choices=["fail", "latest"],
+        default="fail",
+        help="What to do when a daily/weekly/monthly slicer value is not found in the dataset. "
+             "'fail' aborts before exporting. 'latest' substitutes the most recent available value.",
+    )
     parser.add_argument("--render-wait", type=float, default=4.0, help="Seconds to wait after render event before generating PDF. Default 4s; reduce to 2s if no HTML visuals.")
     parser.add_argument("--node-script", default=None, help="Path to capture_slicer_state.js. Required for slicer-based date filtering.")
     parser.add_argument("--debug", action="store_true", help="Print the ExportTo payload before sending.")
@@ -100,6 +107,7 @@ def main() -> None:
         raise ValueError("No export jobs matched the provided selector.")
 
     jobs = [apply_filter_mode(job, args.filter_mode) for job in jobs]
+    jobs = _validate_slicer_dates(jobs, powerbi, args.on_missing_date)
 
     pdf_script = Path(args.node_script).parent / "export_report_pdf.js" if args.node_script else None
     use_puppeteer = pdf_script and pdf_script.exists()
@@ -177,6 +185,86 @@ def replace_job_filters(job, filters, slicer_overrides=None):
     if slicer_overrides is not None:
         kwargs["slicer_overrides"] = slicer_overrides
     return replace(job, **kwargs)
+
+
+
+def _latest_slicer_value(powerbi, report, table, column, current_value: str) -> str | None:
+    """Return the most recent available value for a slicer column.
+    Datetime columns are sorted by the datetime value (DESC in DAX).
+    Text columns (e.g. WeekMonthYear) are parsed and sorted chronologically in Python.
+    """
+    is_datetime = "T" in current_value and len(current_value) >= 10
+    limit = 1 if is_datetime else 104  # 2 years of weeks as safety margin
+    values = powerbi.get_column_values(report, table, column, limit=limit)
+    if not values:
+        return None
+    if is_datetime:
+        return values[0]  # DAX TOPN DESC already gives most recent datetime first
+
+    # Text column — sort chronologically by parsing "Week N Mon YYYY"
+    def _week_sort_key(label: str):
+        parts = label.split()
+        if len(parts) == 4 and parts[0] == "Week":
+            try:
+                from datetime import datetime as _dt
+                month = _dt.strptime(parts[2], "%b").month
+                return (int(parts[3]), month, int(parts[1]))
+            except (ValueError, IndexError):
+                pass
+        return (0, 0, 0)
+
+    return max(values, key=_week_sort_key)
+
+
+def _validate_slicer_dates(jobs: list, powerbi, behavior: str) -> list:
+    """Check each report's date slicer values exist in the dataset before exporting.
+    behavior='fail'   → raise ValueError listing which values are missing.
+    behavior='latest' → substitute the most recent available value and continue.
+    """
+    from dataclasses import replace as dc_replace
+
+    checked: dict[tuple, str | None] = {}  # (report_key, table, column, value) → resolved
+
+    for job in jobs:
+        for slicer in job.slicer_overrides:
+            key = (job.report.key, slicer.table, slicer.column, slicer.value)
+            if key in checked:
+                continue
+            exists = powerbi.value_exists_in_column(job.report, slicer.table, slicer.column, slicer.value)
+            if exists:
+                checked[key] = slicer.value
+            elif behavior == "latest":
+                latest = _latest_slicer_value(powerbi, job.report, slicer.table, slicer.column, slicer.value)
+                if latest:
+                    print(
+                        f"WARNING: {slicer.table}/{slicer.column} = '{slicer.value}' not in dataset. "
+                        f"Using latest: '{latest}'"
+                    )
+                    checked[key] = latest
+                else:
+                    checked[key] = None
+            else:
+                checked[key] = None
+
+    missing = [(k, v) for k, v in checked.items() if v is None]
+    if missing:
+        details = "\n".join(f"  {k[1]}/{k[2]} = '{k[3]}'" for k, _ in missing)
+        raise ValueError(
+            f"Date slicer value(s) not found in dataset. "
+            f"The data pipeline may not have run yet for this date.\n{details}\n"
+            f"Rerun with --on-missing-date latest to use the most recent available value instead."
+        )
+
+    def resolve_slicers(job):
+        new_slicers = [
+            dc_replace(s, value=checked[(job.report.key, s.table, s.column, s.value)])
+            if checked.get((job.report.key, s.table, s.column, s.value)) != s.value
+            else s
+            for s in job.slicer_overrides
+        ]
+        return dc_replace(job, slicer_overrides=new_slicers)
+
+    return [resolve_slicers(job) for job in jobs]
 
 
 def url_encode_filter_value(filter_value: str) -> str:

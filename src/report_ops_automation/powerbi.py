@@ -88,6 +88,36 @@ class PowerBIClient:
                 )
         return values
 
+    def value_exists_in_column(self, report: PowerBIReport, table: str, column: str, value: str) -> bool:
+        """Return True if `value` exists in the column (FILTER query — not TOPN)."""
+        dataset_id = self.get_report_dataset_id(report)
+        query = _value_exists_dax(table, column, value)
+        payload = self.api.post_json(
+            f"/datasets/{dataset_id}/executeQueries",
+            {"queries": [{"query": query}], "serializerSettings": {"includeNulls": False}},
+        )
+        rows = (
+            payload.get("results", [{}])[0]
+            .get("tables", [{}])[0]
+            .get("rows", [])
+        )
+        return len(rows) > 0
+
+    def get_column_values(self, report: PowerBIReport, table: str, column: str, limit: int = 10) -> list[str]:
+        """Return up to `limit` distinct non-null values for a column, sorted descending."""
+        dataset_id = self.get_report_dataset_id(report)
+        query = _column_values_dax(table, column, limit)
+        payload = self.api.post_json(
+            f"/datasets/{dataset_id}/executeQueries",
+            {"queries": [{"query": query}], "serializerSettings": {"includeNulls": False}},
+        )
+        rows = (
+            payload.get("results", [{}])[0]
+            .get("tables", [{}])[0]
+            .get("rows", [])
+        )
+        return [str(row.get("[Value]", row.get("Value", ""))).strip() for row in rows if row]
+
     def list_bookmarks(self, report: PowerBIReport) -> list[dict]:
         return self.api.get_json(
             f"/groups/{report.workspace_id}/reports/{report.report_id}/bookmarks"
@@ -171,6 +201,33 @@ SELECTCOLUMNS(
     "Value", {full_ref}
 )
 ORDER BY [Value]
+""".strip()
+
+
+def _value_exists_dax(table: str, column: str, value: str) -> str:
+    table_ref = table.replace("'", "''")
+    col_ref = column.replace("]", "]]")
+    full_ref = f"'{table_ref}'[{col_ref}]"
+    # Datetime values use DATE(); text values use string literals
+    if "T" in value and len(value) >= 10:
+        y, m, d = value[:10].split("-")
+        dax_val = f"DATE({int(y)}, {int(m)}, {int(d)})"
+    else:
+        escaped = value.replace('"', '""')
+        dax_val = f'"{escaped}"'
+    return f"EVALUATE FILTER(VALUES({full_ref}), {full_ref} = {dax_val})"
+
+
+def _column_values_dax(table: str, column: str, limit: int) -> str:
+    table_ref = table.replace("'", "''")
+    column_ref = column.replace("]", "]]")
+    full_ref = f"'{table_ref}'[{column_ref}]"
+    return f"""
+EVALUATE
+SELECTCOLUMNS(
+    TOPN({limit}, FILTER(VALUES({full_ref}), NOT ISBLANK({full_ref})), {full_ref}, DESC),
+    "Value", {full_ref}
+)
 """.strip()
 
 
