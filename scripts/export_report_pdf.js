@@ -155,6 +155,17 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
     if (!loaded) throw new Error("Report failed to load");
     process.stderr.write("Report loaded\n");
 
+    // Apply fit-to-width so the report fills the container with no side whitespace
+    await page.evaluate(async () => {
+      const models = window["powerbi-client"].models;
+      await window._report.updateSettings({
+        layoutType: models.LayoutType.Custom,
+        customLayout: { displayOption: models.DisplayOption.FitToWidth },
+      });
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+    process.stderr.write("Fit-to-width applied\n");
+
     // Set date slicers on all pages
     if (slicers.length > 0) {
       const pages = await page.evaluate(() => window._report.getPages().then(ps => ps.map(p => ({ name: p.name, displayName: p.displayName }))));
@@ -200,10 +211,13 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
           await window._report.setFilters(filterObjs);
         }, job.filters || []);
 
-        // Navigate to the export page
+        // Navigate to the export page (match by internal name or display name)
         await page.evaluate(async (pageName) => {
           window._rendered = false;
-          await window._report.setPage(pageName);
+          const pages = await window._report.getPages();
+          const target = pages.find(p => p.name === pageName || p.displayName === pageName);
+          if (!target) throw new Error(`Page not found: ${pageName}`);
+          await target.setActive();
         }, job.pageName);
 
         // Wait for rendered event or timeout
@@ -225,7 +239,7 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
         process.stderr.write(`Done ${job.exportKey}: ${pdfBuffer.length} bytes\n`);
         results.push({ exportKey: job.exportKey, success: true, outputFile: job.outputFile });
       } catch (err) {
-        const msg = err.message || String(err);
+        const msg = err && err.message ? err.message : JSON.stringify(err);
         process.stderr.write(`Failed ${job.exportKey}: ${msg}\n`);
         results.push({ exportKey: job.exportKey, success: false, error: msg });
       }
