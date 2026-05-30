@@ -1,0 +1,72 @@
+sharepoint:
+  folder_url: "https://nabatisnackcoid.sharepoint.com/sites/DataTeam/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FDataTeam%2FShared%20Documents%2FEnterprise%20Control%20Tower%2F4%2E%20Data%20Product%2FReport%2FReport%20Automation&viewid=4aa5e741%2D0189%2D4be7%2D877d%2D1157bb6a932d"
+
+powerbi_reports:
+  - key: "operation"
+    report_name: "Operation"
+    workspace_id: "f4b5167e-0e1b-4cd2-bc8b-d3a98a9eedf5"
+    report_id: "12c84198-d7c5-45a4-9cd7-39584f5fce4e"
+    dataset_id: "1f31112f-e606-41ac-87d6-5f34a51b39b7"
+    output_filename: "{report_name}_{level_key}_{value_key}_{business_date}.pdf"
+    date_filters:
+      daily:
+        table: "Mapping_Date_RFID"
+        column: "DateOfBusiness"
+        template: "{table}/{column} eq {business_date_datetime}"
+        value: "business_date_label"
+        slicer_name: "Daily Slicer"
+      weekly:
+        table: "Map_Week_Only"
+        column: "WeekMonthYear"
+        template: "{table}/{column} eq '{week_month_year}'"
+        value: "week_month_year"
+        slicer_name: "Weekly Slicer"
+      monthly:
+        table: "Mapping_Date_RFID"
+        column: "MonthMap"
+        template: "{table}/{column} eq {month_datetime}"
+        value: "month_label"
+        slicer_name: "Monthly Slicer"
+    export_groups:
+      - key: "national"
+        display_name: "National"
+        page_name: "Operation - National"
+        values:
+          - key: "national"
+            label: "National"
+
+      - key: "regional"
+        display_name: "Regional"
+        page_name: "Operation - Regional"
+        filter_templates:
+          - "Mapping_Resto_RFID/RegionOperational eq '{value}'"
+        values:
+          - key: "regional_2"
+            label: "REGIONAL 2"
+            value: "REGIONAL 2"
+        values_from:
+          table: "Mapping_Resto_RFID"
+          column: "RegionOperational"
+          key_prefix: "region"
+
+      - key: "area"
+        display_name: "Area"
+        page_name: "Operation - Area"
+        filter_templates:
+          - "Mapping_Resto_RFID/AreaOperational eq '{value}'"
+        values_from:
+          table: "Mapping_Resto_RFID"
+          column: "AreaOperational"
+          key_prefix: "area"
+
+      - key: "store"
+        display_name: "Store"
+        page_name: "Operation - Store"
+        filter_templates:
+          - "Mapping_Resto_RFID/StoreID eq '{value}'"
+        values_from:
+          table: "Mapping_Resto_RFID"
+          column: "StoreID"
+          key_prefix: "store"
+
+report_delivery: []
