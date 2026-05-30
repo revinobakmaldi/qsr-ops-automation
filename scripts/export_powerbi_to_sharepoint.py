@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import date, timedelta
@@ -243,7 +244,6 @@ def _run_puppeteer_exports(
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
 
-            import threading
             def _pipe_stderr():
                 for line in proc.stderr:
                     print(f"{tag} {line.rstrip()}")
