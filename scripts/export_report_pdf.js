@@ -237,12 +237,21 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
           await window._report.setFilters(filterObjs);
         }, job.filters || []);
 
-        // Navigate to the export page (match by internal name or display name)
+        // Navigate to the export page (match by internal name or display name).
+        // If already on the target page, navigate away first — calling setActive()
+        // on the current page doesn't fire a rendered event, so the filter update
+        // applied by setFilters() above lands mid-render and causes top whitespace.
         await page.evaluate(async (pageName) => {
-          window._rendered = false;
           const pages = await window._report.getPages();
           const target = pages.find(p => p.name === pageName || p.displayName === pageName);
           if (!target) throw new Error(`Page not found: ${pageName}`);
+          const current = pages.find(p => p.isActive);
+          if (current && current.name === target.name) {
+            const other = pages.find(p => p.name !== target.name);
+            if (other) await other.setActive();
+            await new Promise((r) => setTimeout(r, 800));
+          }
+          window._rendered = false;
           await target.setActive();
         }, job.pageName);
 
