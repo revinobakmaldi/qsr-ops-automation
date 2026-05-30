@@ -110,12 +110,16 @@ def main() -> None:
         print(f"Uploaded {job.output_filename}: {url}")
         return job.export_key, url
 
+    failed = []
     if args.workers <= 1:
         for job in jobs:
-            run_job(job)
+            try:
+                run_job(job)
+            except Exception as e:
+                print(f"FAILED {job.export_key}: {e}")
+                failed.append(job.export_key)
     else:
         print(f"Running {len(jobs)} jobs with {args.workers} parallel workers...")
-        failed = []
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(run_job, job): job for job in jobs}
             for future in as_completed(futures):
@@ -125,8 +129,8 @@ def main() -> None:
                 except Exception as e:
                     print(f"FAILED {job.export_key}: {e}")
                     failed.append(job.export_key)
-        if failed:
-            raise RuntimeError(f"{len(failed)} job(s) failed: {', '.join(failed)}")
+    if failed:
+        raise RuntimeError(f"{len(failed)} job(s) failed: {', '.join(failed)}")
 
 
 def apply_filter_mode(job, filter_mode: str):
