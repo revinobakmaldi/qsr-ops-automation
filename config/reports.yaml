@@ -13,7 +13,7 @@ powerbi_reports:
         table: "Mapping_Date_RFID"
         column: "DateOfBusiness"
         template: "{table}/{column} eq {business_date_datetime}"
-        value: "business_date_label"
+        value: "business_date_datetime"
         slicer_name: "Daily Slicer"
       weekly:
         table: "Map_Week_Only"
@@ -25,7 +25,7 @@ powerbi_reports:
         table: "Mapping_Date_RFID"
         column: "MonthMap"
         template: "{table}/{column} eq {month_datetime}"
-        value: "month_label"
+        value: "month_datetime"
         slicer_name: "Monthly Slicer"
     export_groups:
       - key: "national"
