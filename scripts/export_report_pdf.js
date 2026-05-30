@@ -176,27 +176,42 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
     }, canvasWidth);
     process.stderr.write(`Page fit: ${JSON.stringify(fitResult)}\n`);
     if (fitResult.zoom !== 1) await new Promise((r) => setTimeout(r, 2000));
-    const pdfHeight = fitResult.scaledH || canvasHeight;
 
-    // If the report is taller than the initial canvas, expand the container and
-    // viewport so the full report is rendered (not just the first 720px).
-    if (pdfHeight > canvasHeight) {
-      await page.setViewport({ width: canvasWidth, height: pdfHeight });
-      await page.evaluate((h) => {
-        document.documentElement.style.height = h + "px";
-        document.body.style.height = h + "px";
-        const container = document.getElementById("container");
-        if (container) container.style.height = h + "px";
-      }, pdfHeight);
-      await new Promise((r) => setTimeout(r, 3000)); // wait for Power BI iframe to resize
-      process.stderr.write(`Viewport expanded to ${canvasWidth}×${pdfHeight}\n`);
+    // Collect per-page heights — each page has its own defaultSize.height.
+    // We need this to set the correct viewport+PDF height per job; using a
+    // single height for all pages causes Power BI to vertically center shorter
+    // pages, adding whitespace at the top.
+    const allPages = await page.evaluate(() =>
+      window._report.getPages().then(ps => ps.map(p => ({
+        name: p.name, displayName: p.displayName, defaultSize: p.defaultSize,
+      })))
+    );
+    const pageHeights = {};
+    for (const p of allPages) {
+      const h = p.defaultSize && p.defaultSize.height ? p.defaultSize.height : null;
+      if (h) {
+        pageHeights[p.name] = Math.ceil(h * fitResult.zoom);
+        pageHeights[p.displayName] = Math.ceil(h * fitResult.zoom);
+      }
     }
+
+    // Expand viewport to the tallest page upfront so mid-session we only shrink
+    const maxH = Math.max(canvasHeight, ...Object.values(pageHeights));
+    await page.setViewport({ width: canvasWidth, height: maxH });
+    await page.evaluate((h) => {
+      document.documentElement.style.height = h + "px";
+      document.body.style.height = h + "px";
+      const container = document.getElementById("container");
+      if (container) container.style.height = h + "px";
+    }, maxH);
+    await new Promise((r) => setTimeout(r, 3000));
+    process.stderr.write(`Viewport set to ${canvasWidth}×${maxH}\n`);
+
+    let currentViewportH = maxH;
 
     // Set date slicers on all pages
     if (slicers.length > 0) {
-      const pages = await page.evaluate(() => window._report.getPages().then(ps => ps.map(p => ({ name: p.name, displayName: p.displayName }))));
-
-      for (const p of pages) {
+      for (const p of allPages) {
         await page.evaluate(async (pageName) => window._report.setPage(pageName), p.name);
         await new Promise((r) => setTimeout(r, 1200));
 
@@ -237,10 +252,9 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
           await window._report.setFilters(filterObjs);
         }, job.filters || []);
 
-        // Navigate to the export page (match by internal name or display name).
-        // If already on the target page, navigate away first — calling setActive()
-        // on the current page doesn't fire a rendered event, so the filter update
-        // applied by setFilters() above lands mid-render and causes top whitespace.
+        // Navigate to the export page. If already on the target page, navigate
+        // away first — setActive() on the current page does not fire a rendered
+        // event, so we'd fall through to the 30s timeout before continuing.
         await page.evaluate(async (pageName) => {
           const pages = await window._report.getPages();
           const target = pages.find(p => p.name === pageName || p.displayName === pageName);
@@ -262,10 +276,27 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
         // Extra wait for HTML visuals and slow content
         await new Promise((r) => setTimeout(r, renderWait));
 
+        // Resize viewport+container to this page's exact height so Power BI
+        // fills the container perfectly — a shorter page (e.g. Store = 3700px)
+        // in a taller container (e.g. 4280px from Area) gets vertically centred,
+        // creating whitespace at the top.
+        const jobPdfH = pageHeights[job.pageName] || maxH;
+        if (jobPdfH !== currentViewportH) {
+          await page.setViewport({ width: canvasWidth, height: jobPdfH });
+          await page.evaluate((h) => {
+            document.documentElement.style.height = h + "px";
+            document.body.style.height = h + "px";
+            const container = document.getElementById("container");
+            if (container) container.style.height = h + "px";
+          }, jobPdfH);
+          await new Promise((r) => setTimeout(r, 1500));
+          currentViewportH = jobPdfH;
+        }
+
         // Generate PDF
         const pdfBuffer = await page.pdf({
           width: `${canvasWidth}px`,
-          height: `${pdfHeight}px`,
+          height: `${jobPdfH}px`,
           printBackground: true,
           margin: { top: "0px", right: "0px", bottom: "0px", left: "0px" },
         });
