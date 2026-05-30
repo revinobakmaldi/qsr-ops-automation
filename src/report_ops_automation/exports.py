@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .config import AppConfig, ExportGroup, ExportValue, PowerBIReport
 
@@ -212,18 +212,24 @@ def _render_date_slicer(date_filter, business_date: str) -> SlicerOverride:
 
 def _date_values(business_date: str) -> dict[str, str]:
     parsed = datetime.strptime(business_date, "%Y-%m-%d").date()
-    week_number = ((parsed.day - 1) // 7) + 1
-    month_label = parsed.strftime("%b")
-    # Monthly slicer targets the last completed full month, not the running month
+
+    # Weekly slicer: previous complete Mon–Sun week
+    current_week_monday = parsed - timedelta(days=parsed.weekday())
+    prev_week_monday = current_week_monday - timedelta(days=7)
+    prev_week_number = ((prev_week_monday.day - 1) // 7) + 1
+    week_month_year = f"Week {prev_week_number} {prev_week_monday.strftime('%b')} {prev_week_monday.year}"
+
+    # Monthly slicer: last completed full month
     if parsed.month == 1:
         prev_month_first = parsed.replace(year=parsed.year - 1, month=12, day=1)
     else:
         prev_month_first = parsed.replace(month=parsed.month - 1, day=1)
     month_date = prev_month_first.isoformat()
+
     return {
         "business_date": business_date,
         "business_date_datetime": f"datetime'{business_date}T00:00:00'",
-        "week_month_year": f"Week {week_number} {month_label} {parsed.year}",
+        "week_month_year": week_month_year,
         "month_date": month_date,
         "month_datetime": f"datetime'{month_date}T00:00:00'",
     }

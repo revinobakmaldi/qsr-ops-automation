@@ -155,16 +155,42 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
     if (!loaded) throw new Error("Report failed to load");
     process.stderr.write("Report loaded\n");
 
-    // Apply fit-to-width so the report fills the container with no side whitespace
-    await page.evaluate(async () => {
-      const models = window["powerbi-client"].models;
-      await window._report.updateSettings({
-        layoutType: models.LayoutType.Custom,
-        customLayout: { displayOption: models.DisplayOption.FitToWidth },
-      });
-    });
-    await new Promise((r) => setTimeout(r, 1500));
-    process.stderr.write("Fit-to-width applied\n");
+    // Zoom the report so its native page width fills the container width exactly.
+    // Power BI defaults to "Fit to Page" which leaves side whitespace when the
+    // report's aspect ratio doesn't match the container's. setZoom overrides this.
+    const fitResult = await page.evaluate(async (containerWidth) => {
+      try {
+        const pages = await window._report.getPages();
+        const active = pages.find(p => p.isActive) || pages[0];
+        const ds = active && active.defaultSize;
+        // Widescreen (type 0) = 1280×720, Standard (type 1) = 960×720; custom has explicit w/h
+        const nativeW = (ds && ds.width) || (ds && ds.type === 0 ? 1280 : ds && ds.type === 1 ? 960 : null);
+        const nativeH = (ds && ds.height) || (ds && ds.type === 0 ? 720 : ds && ds.type === 1 ? 720 : null);
+        if (!nativeW) return { zoom: 1, ds };
+        const zoom = containerWidth / nativeW;
+        await window._report.setZoom(zoom);
+        return { zoom, nativeW, nativeH, scaledH: nativeH ? Math.ceil(nativeH * zoom) : null, ds };
+      } catch (e) {
+        return { zoom: 1, error: e.message };
+      }
+    }, canvasWidth);
+    process.stderr.write(`Page fit: ${JSON.stringify(fitResult)}\n`);
+    if (fitResult.zoom !== 1) await new Promise((r) => setTimeout(r, 2000));
+    const pdfHeight = fitResult.scaledH || canvasHeight;
+
+    // If the report is taller than the initial canvas, expand the container and
+    // viewport so the full report is rendered (not just the first 720px).
+    if (pdfHeight > canvasHeight) {
+      await page.setViewport({ width: canvasWidth, height: pdfHeight });
+      await page.evaluate((h) => {
+        document.documentElement.style.height = h + "px";
+        document.body.style.height = h + "px";
+        const container = document.getElementById("container");
+        if (container) container.style.height = h + "px";
+      }, pdfHeight);
+      await new Promise((r) => setTimeout(r, 3000)); // wait for Power BI iframe to resize
+      process.stderr.write(`Viewport expanded to ${canvasWidth}×${pdfHeight}\n`);
+    }
 
     // Set date slicers on all pages
     if (slicers.length > 0) {
@@ -230,7 +256,7 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
         // Generate PDF
         const pdfBuffer = await page.pdf({
           width: `${canvasWidth}px`,
-          height: `${canvasHeight}px`,
+          height: `${pdfHeight}px`,
           printBackground: true,
           margin: { top: "0px", right: "0px", bottom: "0px", left: "0px" },
         });
