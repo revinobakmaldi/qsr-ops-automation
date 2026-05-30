@@ -1,9 +1,22 @@
 # Report Ops Automation
 
-Two automations are included:
+Two automations:
 
-1. Export Power BI reports with configured filter state to PDF, rename them, and upload them to a SharePoint document library folder.
-2. Find the generated PDFs in SharePoint and send each report link to the mapped Teams recipient.
+1. Export Power BI reports to PDF with correct filter/slicer state and upload to SharePoint.
+2. Find the generated PDFs in SharePoint and send each report link to the mapped Teams/email recipient.
+
+## Architecture
+
+```
+export_powerbi_to_sharepoint.py  (Python orchestrator)
+  → validates date slicer values exist in the dataset (pre-flight check)
+  → splits jobs into N worker chunks
+  → each worker calls export_report_pdf.js (Node.js + Puppeteer)
+  → Node.js embeds the report, sets date slicers + value filters, generates PDF
+  → Python uploads each PDF to SharePoint immediately as Node.js finishes it
+```
+
+The ExportTo REST API path still exists as a fallback (no Node.js required) but is not used for reports with HTML visuals or date slicers with Edit Interactions.
 
 ## Setup
 
@@ -17,61 +30,133 @@ cp config/reports.example.yaml config/reports.yaml
 
 Fill `.env` and `config/reports.yaml`.
 
-For reports with multiple pages and value maps, use `export_groups` in `config/reports.yaml`.
-Each generated PDF gets this key:
+## Export key format
 
-```text
+Each generated PDF has a unique key:
+
+```
 {report_key}.{export_group_key}.{value_key}
 ```
 
-Example: `sales_daily.regional.west`.
+Example: `operation.regional.regional_2`, `operation.store.f103`.
 
-When an export group has `values_from`, the script queries the Power BI semantic model for distinct values from that table/column and generates one PDF per value.
+When an export group uses `values_from`, the script queries the Power BI semantic model for distinct column values and generates one PDF per value.
 
-## Azure permissions
-
-The export script uses app credentials. Power BI and SharePoint can use different app registrations:
-
-- Power BI REST API application permissions needed for report export.
-- Microsoft Graph application permission such as `Sites.ReadWrite.All` for SharePoint upload.
-- Power BI tenant settings must allow service principals to use Power BI APIs, and report export requires supported capacity/licensing.
-
-Set these in `.env`:
-
-- `POWERBI_TENANT_ID`, `POWERBI_CLIENT_ID`, `POWERBI_CLIENT_SECRET`
-- `SHAREPOINT_TENANT_ID`, `SHAREPOINT_CLIENT_ID`, `SHAREPOINT_CLIENT_SECRET`
-
-The old shared names `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` are still accepted as fallbacks.
-
-Email delivery uses Microsoft Graph application permissions:
-
-- Add `Mail.Send` application permission to the email app registration and grant admin consent.
-- Set `EMAIL_TENANT_ID`, `EMAIL_CLIENT_ID`, `EMAIL_CLIENT_SECRET`, and `EMAIL_SENDER_UPN`.
-- If `EMAIL_*` credentials are omitted, the script falls back to `SHAREPOINT_*`, but that app must also have `Mail.Send`.
-
-Teams delivery uses delegated device-code auth because normal Teams chat message sending is a user action:
-
-- Microsoft Graph delegated permissions such as `Chat.ReadWrite`, `ChatMessage.Send`, `User.Read`, and SharePoint read permissions such as `Files.Read.All` or `Sites.Read.All`.
-- The signed-in account must be the same user as `TEAMS_SENDER_UPN`.
-
-## Run
+## Running the export
 
 ```bash
-python scripts/export_powerbi_to_sharepoint.py --config config/reports.yaml
-python scripts/send_sharepoint_pdfs_to_teams.py --config config/reports.yaml
+# Full run — all reports for yesterday's business date
+python3 scripts/export_powerbi_to_sharepoint.py \
+  --node-script scripts/capture_slicer_state.js \
+  --workers 4
+
+# Specific date
+python3 scripts/export_powerbi_to_sharepoint.py \
+  --business-date 2026-05-25 \
+  --node-script scripts/capture_slicer_state.js \
+  --workers 4
+
+# Test a single report (use --export-key, never modify reports.yaml)
+python3 scripts/export_powerbi_to_sharepoint.py \
+  --business-date 2026-05-25 \
+  --export-key operation.regional.regional_2 \
+  --node-script scripts/capture_slicer_state.js \
+  --workers 1
 ```
 
-Use `--dry-run` on the delivery script to print planned deliveries without sending messages.
+### All CLI flags
 
-Delivery mapping supports `channel: email` or `channel: teams`. Email is the default.
+| Flag | Default | Description |
+|---|---|---|
+| `--config` | `config/reports.yaml` | Config file path |
+| `--business-date` | yesterday | Date for daily/weekly/monthly slicer values (YYYY-MM-DD) |
+| `--run-date` | today | Date used in output filenames |
+| `--export-key` | *(all)* | Limit to specific key(s), repeatable |
+| `--export-key-file` | — | File with one export key per line (use for retry) |
+| `--on-missing-date` | `fail` | What to do if slicer date not in dataset: `fail` or `latest` |
+| `--workers` | `1` | Parallel browser sessions |
+| `--render-wait` | `4.0` | Seconds to wait after render event before PDF capture |
+| `--max-jobs` | `0` | Stop after N jobs (0 = unlimited) |
+| `--filter-mode` | `all` | Debug filter mode: `all`, `none`, `date-only`, etc. |
+| `--node-script` | — | Path to `capture_slicer_state.js` (required for Puppeteer path) |
+| `--list-values` | — | Print discovered column values and exit |
+| `--list-bookmarks` | — | Print saved bookmarks and exit |
+
+### Date slicer validation (pre-flight)
+
+Before any export runs, each date slicer value is checked against the live dataset:
+
+```bash
+# If May 26 data isn't ready yet:
+# ValueError: Date slicer value(s) not found in dataset.
+#   Mapping_Date_RFID/DateOfBusiness = '2026-05-26T00:00:00'
+# Rerun with --on-missing-date latest to use the most recent available value instead.
+
+# Use the most recent available date instead of failing:
+python3 scripts/export_powerbi_to_sharepoint.py \
+  --business-date 2026-05-26 \
+  --on-missing-date latest \
+  --node-script scripts/capture_slicer_state.js \
+  --workers 4
+# WARNING: Mapping_Date_RFID/DateOfBusiness = '2026-05-26T00:00:00' not in dataset. Using latest: '2026-05-25T00:00:00'
+```
+
+### Retrying failed jobs
+
+When jobs fail, their export keys are saved to `failed_YYYYMMDD_HHMMSS.txt`. The terminal prints the exact retry command:
+
+```bash
+# Retry only the failed jobs
+python3 scripts/export_powerbi_to_sharepoint.py \
+  --business-date 2026-05-25 \
+  --export-key-file failed_20260525_003142.txt \
+  --node-script scripts/capture_slicer_state.js \
+  --workers 4
+```
+
+Each PDF is uploaded to SharePoint immediately after it's generated, so a crash on job N does not lose the already-uploaded jobs 1..(N-1).
+
+## Delivery
+
+```bash
+python3 scripts/send_sharepoint_pdfs_to_teams.py --config config/reports.yaml
+python3 scripts/send_sharepoint_pdfs_to_teams.py --config config/reports.yaml --dry-run
+```
 
 ```yaml
 report_delivery:
-  - export_key: "operation.regional.region_jakarta"
+  - export_key: "operation.regional.regional_2"
     channel: "email"
     recipient_upn: "person@company.com"
     subject: "{report_name} PDF is ready"
     message: "Hi, your {report_name} PDF is ready: <a href=\"{web_url}\">{file_name}</a>"
+```
+
+## Azure permissions
+
+Power BI and SharePoint can use different app registrations.
+
+**Power BI** (app credentials):
+- Power BI REST API application permissions
+- Tenant setting: allow service principals to use Power BI APIs
+
+**SharePoint** (app credentials):
+- `Sites.ReadWrite.All` Microsoft Graph application permission
+
+**Email** (app credentials):
+- `Mail.Send` Microsoft Graph application permission
+- Set `EMAIL_TENANT_ID`, `EMAIL_CLIENT_ID`, `EMAIL_CLIENT_SECRET`, `EMAIL_SENDER_UPN`
+- Falls back to `SHAREPOINT_*` credentials if `EMAIL_*` are not set
+
+**Teams** (delegated device-code auth):
+- `Chat.ReadWrite`, `ChatMessage.Send`, `User.Read`, `Files.Read.All`
+- Signed-in account must match `TEAMS_SENDER_UPN`
+
+`.env` variables:
+```
+POWERBI_TENANT_ID / POWERBI_CLIENT_ID / POWERBI_CLIENT_SECRET
+SHAREPOINT_TENANT_ID / SHAREPOINT_CLIENT_ID / SHAREPOINT_CLIENT_SECRET
+# AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET  (legacy fallback for both)
 ```
 
 ## Known limitations & lessons learned
@@ -80,46 +165,46 @@ report_delivery:
 
 | Situation | What happens | Fix |
 |---|---|---|
-| Report has HTML content visuals | ExportTo renders "This visual does not support exporting" in PDF | Use Puppeteer PDF path (`export_report_pdf.js`) |
-| Date filters are slicers with Edit Interactions | `reportLevelFilters` bypasses edit interactions — wrong visuals get filtered | Use Puppeteer `setSlicerState()` which respects interactions |
+| Report has HTML content visuals | ExportTo renders "This visual does not support exporting" | Use Puppeteer path |
+| Date filters are slicers with Edit Interactions | `reportLevelFilters` bypasses edit interactions — wrong visuals filtered | Use Puppeteer `setSlicerState()` |
 | Slicer has a saved default selection | API filter + slicer default = empty intersection = No Data | Clear slicer defaults in the report, or use Puppeteer |
-| `defaultBookmark.state` constructed manually | ExportTo rejects all manually built states — format is SDK-only, undocumented | Use `capture_slicer_state.js` to capture a real state via the JS SDK |
+| `defaultBookmark.state` constructed manually | ExportTo rejects all manually built states — format is SDK-only | Use `capture_slicer_state.js` to capture via the JS SDK |
 
-### Filter rules
+### Filter rules (Puppeteer path)
 
-- **Filter pane fields** (e.g., regional filter): use `reportLevelFilters` — works correctly.
-- **Slicer fields** (e.g., date slicers with edit interactions): use Puppeteer `setSlicerState()` — only way to respect edit interactions.
-- **Date values sent to `setSlicerState`**: send the full datetime string **without** a timezone suffix (`2026-05-25T00:00:00`). Power BI stores dates as local-midnight-in-UTC (e.g. May 25 00:00 WIB = `2026-05-24T17:00:00.000Z`). The browser (WIB = UTC+7) converts the timezone-naive string to the correct UTC value automatically. Do NOT strip the time component — passing a date-only string (`2026-05-25`) makes Power BI treat it as UTC midnight, which is 7 hours off and matches no rows. Do NOT add a `Z` suffix — that bypasses the browser conversion and also lands on the wrong UTC value.
-- **Finding the right slicer**: match by `getSlicerState().targets` (table/column), not by visual name — the JS SDK `visual.name` is a GUID, not the Selection pane display name.
-- **Non-active pages**: call `report.setPage(pageName)` before setting slicers on that page — inactive page visuals throw errors.
+- **Value filters** (region, area, store): use `report.setFilters()` at report level.
+- **Date slicers**: use `setSlicerState()` — matches slicers by `getSlicerState().targets` (table/column), not by display name which is a GUID.
+- **Date value format**: pass the full datetime **without** a `Z` suffix — `"2026-05-25T00:00:00"`. Power BI stores dates as local-midnight-in-UTC. The browser (WIB = UTC+7) converts the timezone-naive string to the correct UTC value. Do NOT strip the time (date-only = UTC midnight = 7 hours off = no rows matched). Do NOT add `Z` (bypasses browser conversion = also wrong).
+- **Text slicer columns** (e.g. `WeekMonthYear`): pass the exact string value — `"Week 3 May 2026"`. No datetime conversion needed.
+- **Slicer setup**: navigate to each page and call `setSlicerState()` — slicers on inactive pages are not accessible.
 
-### When to use Puppeteer vs ExportTo
+### PDF generation rules
 
-| Report has... | Use |
-|---|---|
-| HTML content visuals | Puppeteer (`export_report_pdf.js`) |
-| Date slicers with edit interactions | Puppeteer |
-| Only filter-pane filters, no HTML visuals | ExportTo API (faster, no Node.js needed) |
+- **Side whitespace**: use `report.setZoom(containerWidth / nativeW)` from `page.defaultSize` to fill the container width. `LayoutType.Custom + DisplayOption.FitToWidth` via `updateSettings` silently does nothing.
+- **Per-page height**: each report page has a different `defaultSize.height`. Use a per-job viewport resize to exactly match each page's height — using one fixed height causes Power BI to vertically centre shorter pages, adding whitespace at the top.
+- **Slicer loop order**: the slicer setup loop ends on the last page. Navigate away from that page before generating any PDF on the same page — `setActive()` on the already-active page does not fire a rendered event.
+- **Streaming upload**: Node.js writes each job result to stdout immediately on completion. Python reads line-by-line via `Popen` and uploads per result — a crash on job N does not lose already-uploaded jobs.
 
 ### Mistakes made and fixed (don't repeat these)
 
 | Mistake | What happened | Correct approach |
 |---|---|---|
-| Used `updateSettings(LayoutType.Custom, DisplayOption.FitToWidth)` to fix side whitespace | API call silently does nothing — whitespace remained | Use `report.setZoom(containerWidth / nativeW)` calculated from `page.defaultSize` |
-| Stripped time component from datetime slicer values (`"2026-05-25T00:00:00"` → `"2026-05-25"`) | Power BI treated the date-only string as UTC midnight — 7 hours off from local midnight, matched no rows | Keep the full datetime without `Z` suffix; the browser (UTC+7) converts it to the correct UTC value automatically |
-| Changed daily/monthly slicer `value` keys to display label format (`"25-May-26"`, `"April 2026"`) | Slicer showed the right label visually but the display string doesn't match the internal datetime column value — no filtering | Use `business_date_datetime` / `month_datetime` keys (which produce `"2026-05-25T00:00:00"`) — Power BI auto-formats the display |
-| Identified weekly slicer broken; tried same datetime fix | Weekly already worked — it uses a text column (`WeekMonthYear`) so exact string match is correct. Only date columns need the datetime format | Distinguish text columns (exact string match) from date columns (datetime value, let browser convert timezone) |
-| Store page had header whitespace that other levels didn't | Each page has a different `defaultSize.height` (Store=3700, Regional=4250, Area=4280). Using a single viewport height for all jobs caused Power BI to vertically centre shorter pages in the taller container, adding ~150px whitespace at the top. Wrongly diagnosed three times (scroll position, zoom reset, page-transition) before root cause was found by logging `defaultSize` per page. | Collect all page heights at startup; expand viewport to the tallest page once; resize per-job to each page's exact scaled height before generating the PDF |
-| Added `key_prefix: "region"/"area"/"store"` to `values_from` groups | Generated redundant names: `region_regional_2`, `area_jakarta_1`, `store_12345` — `level_key` already provides context | Remove `key_prefix`; the value key is derived cleanly from the column value |
-| Added hardcoded `values` list with only `regional_2` to the regional group | Blocked `values_from` dynamic discovery — only Regional 2 was ever exported | Never add a static `values` list to a group that uses `values_from`. Use `--export-key` to test a single value |
-| Put `config/reports.yaml` in `.gitignore` during a test session | Config changes (slicer formats, key fixes) were never committed — lost on the next clone | Never gitignore the config. Use `--export-key` flag to limit jobs during testing instead of modifying the config |
-| Set `--workers` default to 4 in argparse | User didn't want that — needed two extra commits to revert (one to change, one to revert) | Discuss default values before changing them. Use `git reset --hard` to remove bad commits rather than adding a revert commit |
-| Created a manual JSON config and ran `export_report_pdf.js` directly to test | Bypassed the Python orchestration script — slicers, filter modes, filename templating all skipped | Always use `export_powerbi_to_sharepoint.py` with `--export-key` and `--business-date` for testing |
+| Used `updateSettings(LayoutType.Custom, DisplayOption.FitToWidth)` | Silently does nothing | `report.setZoom(containerWidth / nativeW)` from `page.defaultSize` |
+| Stripped time from datetime slicer values (`T00:00:00` → date only) | Power BI treated as UTC midnight — 7 hours off, no rows matched | Keep full datetime without `Z`; browser converts timezone correctly |
+| Used display label format for daily/monthly slicers (`"25-May-26"`, `"April 2026"`) | Slicer showed label visually but label ≠ internal datetime value — no filtering | Use `business_date_datetime` / `month_datetime` keys — Power BI auto-formats the display |
+| Assumed weekly slicer was broken because daily/monthly were | Weekly worked fine — it's a text column, exact string match is correct | Distinguish text columns (exact match) from date columns (datetime with browser conversion) |
+| Used TOPN(3) to check if a date value exists in the dataset | Only returned the 3 most recent dates — target date not in top 3 = false negative | Use a FILTER DAX query for existence check; use TOPN separately only for the latest-value fallback |
+| Store page had header whitespace | Each page has a different `defaultSize.height`. Single viewport height caused Power BI to vertically centre shorter pages. Wrongly diagnosed 3 times before root cause found by logging `defaultSize` per page | Expand viewport to tallest page once at startup; resize per-job to each page's exact scaled height |
+| Added `key_prefix` to `values_from` groups | Redundant names: `region_regional_2`, `area_jakarta_1` | Remove `key_prefix`; value key derived from column value; `level_key` already provides context |
+| Added hardcoded `values` list to a group with `values_from` | Blocked dynamic discovery — only that one value was ever exported | Never add static `values` to a group that uses `values_from`; use `--export-key` to test one value |
+| Put `config/reports.yaml` in `.gitignore` | Config changes were never committed — lost on next clone | Never gitignore the config; use `--export-key` for targeted testing |
+| Added a revert commit instead of removing with `git reset --hard` | Extra noise in git history | `git reset --hard HEAD~N && git push --force` to cleanly remove bad commits |
+| Ran `export_report_pdf.js` directly with a hand-crafted JSON | Bypassed Python orchestration — slicers, validation, filename templating all skipped | Always test via `export_powerbi_to_sharepoint.py --export-key` |
 
 ## Microsoft API references
 
 - Power BI `ExportTo` starts an async export job and supports `reportLevelFilters`.
+- Power BI dataset `executeQueries` runs DAX queries for column value discovery and slicer validation.
 - Graph drive upload uses `PUT /drives/{drive-id}/root:/{path}:/content` for files up to 250 MB.
-- Graph drive folder listing uses `GET /drives/{drive-id}/root:/{path}:/children`.
 - Email delivery uses `POST /users/{sender}/sendMail`.
-- Teams messages use `POST /chats/{chat-id}/messages`; one-on-one chats can be created with `POST /chats`.
+- Teams messages use `POST /chats/{chat-id}/messages`; one-on-one chats via `POST /chats`.
