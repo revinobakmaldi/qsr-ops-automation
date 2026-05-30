@@ -117,6 +117,7 @@ def main() -> None:
             jobs, str(pdf_script), config.sharepoint, sp_token_early,
             workers=args.workers,
             render_wait_ms=int(args.render_wait * 1000),
+            business_date=args.business_date,
         )
         if failed:
             from datetime import datetime
@@ -286,7 +287,7 @@ def eq_filter_to_in(filter_value: str) -> str:
 
 def _run_puppeteer_exports(
     jobs, pdf_script: str, sharepoint_config, sp_token: str,
-    workers: int = 1, render_wait_ms: int = 4000,
+    workers: int = 1, render_wait_ms: int = 4000, business_date: str = "",
 ) -> None:
     import os
     from report_ops_automation.sharepoint import SharePointClient
@@ -368,7 +369,7 @@ def _run_puppeteer_exports(
                     with open(tmp, "rb") as fh:
                         pdf_bytes = fh.read()
                     level = (job.group.display_name or job.group.key.title()) if job.group else "Other"
-                    upload_folder = f"{sp.output_folder}/{level}"
+                    upload_folder = f"{sp.output_folder}/{level}/{business_date}" if business_date else f"{sp.output_folder}/{level}"
                     item = sp.upload_file(upload_folder, job.output_filename, pdf_bytes)
                     print(f"{tag} Uploaded {job.output_filename}: {item.get('webUrl', item.get('id'))}")
                     os.unlink(tmp)
