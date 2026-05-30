@@ -74,8 +74,8 @@ python3 scripts/export_powerbi_to_sharepoint.py \
 | `--export-key` | *(all)* | Limit to specific key(s), repeatable |
 | `--export-key-file` | — | File with one export key per line (use for retry) |
 | `--on-missing-date` | `fail` | What to do if slicer date not in dataset: `fail` or `latest` |
-| `--workers` | `1` | Parallel browser sessions |
-| `--render-wait` | `4.0` | Seconds to wait after render event before PDF capture |
+| `--workers` | `1` | Parallel browser sessions. **Max 2** — 3+ concurrent sessions overwhelm Power BI's dataset query pipeline, causing charts to render empty. |
+| `--render-wait` | `4.0` | Seconds to wait after network idle before PDF capture |
 | `--max-jobs` | `0` | Stop after N jobs (0 = unlimited) |
 | `--filter-mode` | `all` | Debug filter mode: `all`, `none`, `date-only`, etc. |
 | `--node-script` | — | Path to `capture_slicer_state.js` (required for Puppeteer path) |
@@ -194,6 +194,7 @@ SHAREPOINT_TENANT_ID / SHAREPOINT_CLIENT_ID / SHAREPOINT_CLIENT_SECRET
 | Used display label format for daily/monthly slicers (`"25-May-26"`, `"April 2026"`) | Slicer showed label visually but label ≠ internal datetime value — no filtering | Use `business_date_datetime` / `month_datetime` keys — Power BI auto-formats the display |
 | Assumed weekly slicer was broken because daily/monthly were | Weekly worked fine — it's a text column, exact string match is correct | Distinguish text columns (exact match) from date columns (datetime with browser conversion) |
 | Used TOPN(3) to check if a date value exists in the dataset | Only returned the 3 most recent dates — target date not in top 3 = false negative | Use a FILTER DAX query for existence check; use TOPN separately only for the latest-value fallback |
+| Used `--workers 4` for the full run | 4 concurrent Power BI embed sessions overwhelm the dataset query pipeline — data queries starve each other, charts render empty. Tried 6+ different render-wait strategies before isolating the root cause by comparing PDF file sizes (521KB broken vs 863KB correct). 2 workers confirmed reliable. | Max `--workers 2`. Use `waitForNetworkIdle` to detect true data load completion. |
 | Store page had header whitespace | Each page has a different `defaultSize.height`. Single viewport height caused Power BI to vertically centre shorter pages. Wrongly diagnosed 3 times before root cause found by logging `defaultSize` per page | Expand viewport to tallest page once at startup; resize per-job to each page's exact scaled height |
 | Added `key_prefix` to `values_from` groups | Redundant names: `region_regional_2`, `area_jakarta_1` | Remove `key_prefix`; value key derived from column value; `level_key` already provides context |
 | Added hardcoded `values` list to a group with `values_from` | Blocked dynamic discovery — only that one value was ever exported | Never add static `values` to a group that uses `values_from`; use `--export-key` to test one value |
