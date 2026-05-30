@@ -111,7 +111,7 @@ python3 scripts/export_powerbi_to_sharepoint.py \
   --business-date 2026-05-25 \
   --export-key-file failed_20260525_003142.txt \
   --node-script scripts/capture_slicer_state.js \
-  --workers 4
+  --workers 2
 ```
 
 Each PDF is uploaded to SharePoint immediately after it's generated, so a crash on job N does not lose the already-uploaded jobs 1..(N-1).
@@ -184,6 +184,8 @@ SHAREPOINT_TENANT_ID / SHAREPOINT_CLIENT_ID / SHAREPOINT_CLIENT_SECRET
 - **Per-page height**: each report page has a different `defaultSize.height`. Use a per-job viewport resize to exactly match each page's height — using one fixed height causes Power BI to vertically centre shorter pages, adding whitespace at the top.
 - **Slicer loop order**: the slicer setup loop ends on the last page. Navigate away from that page before generating any PDF on the same page — `setActive()` on the already-active page does not fire a rendered event.
 - **Streaming upload**: Node.js writes each job result to stdout immediately on completion. Python reads line-by-line via `Popen` and uploads per result — a crash on job N does not lose already-uploaded jobs.
+- **When to export**: use `page.waitForNetworkIdle({ idleTime: 1500 })` to wait for all data queries to finish, then wait `renderWait` seconds for the browser to paint. Do NOT rely on Power BI's `rendered` event alone — it fires when layout is done, before data queries complete. Do NOT rely on `.powerbi-spinner` DOM checks — actual spinners live in shadow DOM and are invisible to `querySelectorAll`. Do NOT use screenshot comparison — empty loading charts look identical between frames.
+- **Parallel worker limit**: max `--workers 2`. More than 2 concurrent Power BI sessions overwhelm the dataset query pipeline — queries compete, data arrives empty, charts render blank. Confirmed by comparing PDF file sizes (521KB broken vs 863KB correct). This is a Power BI service limit, not a code issue.
 
 ### Mistakes made and fixed (don't repeat these)
 
@@ -194,7 +196,9 @@ SHAREPOINT_TENANT_ID / SHAREPOINT_CLIENT_ID / SHAREPOINT_CLIENT_SECRET
 | Used display label format for daily/monthly slicers (`"25-May-26"`, `"April 2026"`) | Slicer showed label visually but label ≠ internal datetime value — no filtering | Use `business_date_datetime` / `month_datetime` keys — Power BI auto-formats the display |
 | Assumed weekly slicer was broken because daily/monthly were | Weekly worked fine — it's a text column, exact string match is correct | Distinguish text columns (exact match) from date columns (datetime with browser conversion) |
 | Used TOPN(3) to check if a date value exists in the dataset | Only returned the 3 most recent dates — target date not in top 3 = false negative | Use a FILTER DAX query for existence check; use TOPN separately only for the latest-value fallback |
-| Used `--workers 4` for the full run | 4 concurrent Power BI embed sessions overwhelm the dataset query pipeline — data queries starve each other, charts render empty. Tried 6+ different render-wait strategies before isolating the root cause by comparing PDF file sizes (521KB broken vs 863KB correct). 2 workers confirmed reliable. | Max `--workers 2`. Use `waitForNetworkIdle` to detect true data load completion. |
+| Used `--workers 4` for the full run | 4 concurrent Power BI embed sessions overwhelm the dataset query pipeline — data queries starve each other, charts render empty. Tried 6+ different render-wait strategies (debounce, spinner DOM check, screenshot diff, network idle) before isolating root cause by comparing PDF file sizes (521KB broken vs 863KB correct). 2 workers confirmed reliable. | Max `--workers 2`. Use `waitForNetworkIdle` to detect true data load completion. Never debug render issues without checking file size first — it immediately tells you if content loaded. |
+| Tried `.powerbi-spinner` DOM check to detect loading visuals | The `powerbi-spinner` elements found by `querySelectorAll` are permanent hidden placeholders (display:none). Actual animated spinners live in Power BI's shadow DOM — invisible to querySelectorAll, so the check always passes immediately and exports too early. | Don't rely on DOM spinner checks for Power BI — use `waitForNetworkIdle` instead. |
+| Tried screenshot comparison (compare consecutive screenshots until identical) | Empty loading chart areas look the same in consecutive screenshots — "stable" is indistinguishable from "never loaded". The approach detects stability but not completeness. | Screenshot comparison can't distinguish empty-loading from empty-static. Use network idle. |
 | Store page had header whitespace | Each page has a different `defaultSize.height`. Single viewport height caused Power BI to vertically centre shorter pages. Wrongly diagnosed 3 times before root cause found by logging `defaultSize` per page | Expand viewport to tallest page once at startup; resize per-job to each page's exact scaled height |
 | Added `key_prefix` to `values_from` groups | Redundant names: `region_regional_2`, `area_jakarta_1` | Remove `key_prefix`; value key derived from column value; `level_key` already provides context |
 | Added hardcoded `values` list to a group with `values_from` | Blocked dynamic discovery — only that one value was ever exported | Never add static `values` to a group that uses `values_from`; use `--export-key` to test one value |
