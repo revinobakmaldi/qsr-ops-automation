@@ -229,7 +229,9 @@ def _date_values(business_date: str) -> dict[str, str]:
     return {
         "business_date": business_date,
         "business_date_datetime": f"datetime'{business_date}T00:00:00'",
+        "business_date_label": parsed.strftime("%d-%b-%y"),
         "week_month_year": week_month_year,
         "month_date": month_date,
         "month_datetime": f"datetime'{month_date}T00:00:00'",
+        "month_label": prev_month_first.strftime("%B %Y"),
     }
