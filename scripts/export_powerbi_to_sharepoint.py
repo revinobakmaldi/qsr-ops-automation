@@ -71,7 +71,6 @@ def main() -> None:
     pbi_token_early = get_app_token(powerbi_tenant_id, powerbi_client_id, powerbi_client_secret, POWERBI_SCOPE)
     sp_token_early = get_app_token(sharepoint_tenant_id, sharepoint_client_id, sharepoint_client_secret, GRAPH_APP_SCOPE)
     powerbi = PowerBIClient(pbi_token_early)
-    sharepoint = SharePointClient.from_config(sp_token_early, config.sharepoint)
 
     if args.list_values:
         _print_column_values(config, powerbi)
@@ -147,8 +146,6 @@ def apply_filter_mode(job, filter_mode: str):
 
 
 def replace_job_filters(job, filters, slicer_overrides=None):
-    from dataclasses import replace
-
     kwargs = {"filters": filters}
     if slicer_overrides is not None:
         kwargs["slicer_overrides"] = slicer_overrides

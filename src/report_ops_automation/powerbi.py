@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from .config import ExportGroup, ExportValue, PowerBIReport
-from .exports import ExportJob, SlicerOverride
+from .exports import ExportJob, SlicerOverride, value_to_key
 from .http import ApiClient
 
 
@@ -26,7 +26,6 @@ class PowerBIClient:
         page_name_map = self._page_name_map(report)
         payload = _export_payload(job, page_name_map, filter_level=filter_level)
         if debug:
-            import json
             print(f"[debug] ExportTo payload:\n{json.dumps(payload, indent=2)}")
         export_job = self.api.post_json(
             f"/groups/{report.workspace_id}/reports/{report.report_id}/ExportTo",
@@ -82,7 +81,7 @@ class PowerBIClient:
             if value:
                 values.append(
                     ExportValue(
-                        key=_value_to_key(value, source.key_prefix),
+                        key=value_to_key(value, source.key_prefix),
                         label=value,
                         value=value,
                     )
@@ -201,9 +200,3 @@ def _build_slicer_state(slicer_overrides: list[SlicerOverride], page_ids: list[s
         }
     }
     return base64.b64encode(json.dumps(state).encode()).decode()
-
-
-def _value_to_key(value: str, prefix: str | None = None) -> str:
-    from .exports import value_to_key
-
-    return value_to_key(value, prefix)
