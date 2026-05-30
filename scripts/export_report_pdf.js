@@ -273,19 +273,12 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
         await page.waitForFunction(() => window._rendered === true, { timeout: 30000 })
           .catch(() => {});
 
-        // Debounce-wait: hold until the rendered event has not fired for renderWait ms.
-        // Data-bound visuals trigger a second rendered event after their queries finish,
-        // so a fixed wait risks capturing charts that are still loading. This approach
-        // resets the timer each time rendered fires, resolving only when rendering is stable.
-        await page.evaluate(async (debounceMs) => {
-          await new Promise((resolve) => {
-            let timer = setTimeout(resolve, debounceMs);
-            const bump = () => { clearTimeout(timer); timer = setTimeout(resolve, debounceMs); };
-            window._report.on("rendered", bump);
-            // Hard cap at 3× debounce so a perpetually re-rendering report doesn't block forever
-            setTimeout(resolve, debounceMs * 3);
-          });
-        }, renderWait);
+        // Wait for all data queries to finish (network idle = 1.5s of no requests),
+        // then wait renderWait ms for the browser to paint the chart data.
+        // With 4 parallel workers all querying Power BI simultaneously the queries
+        // take longer — idleTime catches the true end of loading regardless of CPU.
+        await page.waitForNetworkIdle({ idleTime: 1500, timeout: 60000 }).catch(() => {});
+        await new Promise((r) => setTimeout(r, renderWait));
 
         // Resize viewport+container to this page's exact height so Power BI
         // fills the container perfectly — a shorter page (e.g. Store = 3700px)
