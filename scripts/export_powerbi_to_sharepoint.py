@@ -236,15 +236,29 @@ def _run_puppeteer_exports(
                 json.dump(node_config, f)
                 cfg_path = f.name
 
-            result = subprocess.run(["node", pdf_script, "--config", cfg_path], capture_output=True, text=True)
-            for line in result.stderr.strip().splitlines():
-                print(f"{tag} {line}")
-            if result.returncode != 0:
-                raise RuntimeError(f"export_report_pdf.js failed (worker {worker_id}):\n{result.stderr}")
+            # Stream results: upload each PDF immediately as Node.js finishes it.
+            # This way a crash on job N doesn't lose jobs 1..(N-1) that already succeeded.
+            proc = subprocess.Popen(
+                ["node", pdf_script, "--config", cfg_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+
+            import threading
+            def _pipe_stderr():
+                for line in proc.stderr:
+                    print(f"{tag} {line.rstrip()}")
+            threading.Thread(target=_pipe_stderr, daemon=True).start()
 
             sp = SharePointClient.from_config(sp_token, sharepoint_config)
             failed = []
-            for r in json.loads(result.stdout):
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 job, tmp = tmp_files[r["exportKey"]]
                 if r.get("success") and os.path.exists(tmp):
                     with open(tmp, "rb") as fh:
@@ -255,6 +269,10 @@ def _run_puppeteer_exports(
                 else:
                     print(f"{tag} FAILED {r['exportKey']}: {r.get('error', 'unknown error')}")
                     failed.append(r["exportKey"])
+
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(f"export_report_pdf.js failed (worker {worker_id})")
             return failed
 
         if n == 1:

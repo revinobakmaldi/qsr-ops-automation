@@ -303,11 +303,15 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
 
         fs.writeFileSync(job.outputFile, pdfBuffer);
         process.stderr.write(`Done ${job.exportKey}: ${pdfBuffer.length} bytes\n`);
-        results.push({ exportKey: job.exportKey, success: true, outputFile: job.outputFile });
+        const ok = { exportKey: job.exportKey, success: true, outputFile: job.outputFile };
+        results.push(ok);
+        process.stdout.write(JSON.stringify(ok) + "\n");
       } catch (err) {
         const msg = err && err.message ? err.message : JSON.stringify(err);
         process.stderr.write(`Failed ${job.exportKey}: ${msg}\n`);
-        results.push({ exportKey: job.exportKey, success: false, error: msg });
+        const fail = { exportKey: job.exportKey, success: false, error: msg };
+        results.push(fail);
+        process.stdout.write(JSON.stringify(fail) + "\n");
       }
     }
   } finally {
@@ -352,7 +356,7 @@ async function main() {
     config.renderWait != null ? config.renderWait : 4000
   );
 
-  process.stdout.write(JSON.stringify(results) + "\n");
+  // Results already streamed to stdout per-job; nothing left to write.
 }
 
 main().catch((err) => {
