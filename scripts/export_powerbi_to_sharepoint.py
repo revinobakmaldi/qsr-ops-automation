@@ -367,7 +367,9 @@ def _run_puppeteer_exports(
                 if r.get("success") and os.path.exists(tmp):
                     with open(tmp, "rb") as fh:
                         pdf_bytes = fh.read()
-                    item = sp.upload_file(sp.output_folder, job.output_filename, pdf_bytes)
+                    level = (job.group.display_name or job.group.key.title()) if job.group else "Other"
+                    upload_folder = f"{sp.output_folder}/{level}"
+                    item = sp.upload_file(upload_folder, job.output_filename, pdf_bytes)
                     print(f"{tag} Uploaded {job.output_filename}: {item.get('webUrl', item.get('id'))}")
                     os.unlink(tmp)
                 else:
