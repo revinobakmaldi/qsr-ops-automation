@@ -101,6 +101,22 @@ report_delivery:
 | Date slicers with edit interactions | Puppeteer |
 | Only filter-pane filters, no HTML visuals | ExportTo API (faster, no Node.js needed) |
 
+### Mistakes made and fixed (don't repeat these)
+
+| Mistake | What happened | Correct approach |
+|---|---|---|
+| Used `updateSettings(LayoutType.Custom, DisplayOption.FitToWidth)` to fix side whitespace | API call silently does nothing — whitespace remained | Use `report.setZoom(containerWidth / nativeW)` calculated from `page.defaultSize` |
+| Stripped time component from datetime slicer values (`"2026-05-25T00:00:00"` → `"2026-05-25"`) | Power BI treated the date-only string as UTC midnight — 7 hours off from local midnight, matched no rows | Keep the full datetime without `Z` suffix; the browser (UTC+7) converts it to the correct UTC value automatically |
+| Changed daily/monthly slicer `value` keys to display label format (`"25-May-26"`, `"April 2026"`) | Slicer showed the right label visually but the display string doesn't match the internal datetime column value — no filtering | Use `business_date_datetime` / `month_datetime` keys (which produce `"2026-05-25T00:00:00"`) — Power BI auto-formats the display |
+| Identified weekly slicer broken; tried same datetime fix | Weekly already worked — it uses a text column (`WeekMonthYear`) so exact string match is correct. Only date columns need the datetime format | Distinguish text columns (exact string match) from date columns (datetime value, let browser convert timezone) |
+| Store page had header whitespace that other levels didn't | Slicer setup loop always ends on "Operation - Store". When a store job ran next, `setActive()` on the already-active page didn't fire a rendered event — page captured mid-update | Detect if target is already the active page; navigate to another page first to force a genuine page transition before navigating back |
+| Added `key_prefix: "region"/"area"/"store"` to `values_from` groups | Generated redundant names: `region_regional_2`, `area_jakarta_1`, `store_12345` — `level_key` already provides context | Remove `key_prefix`; the value key is derived cleanly from the column value |
+| Added hardcoded `values` list with only `regional_2` to the regional group | Blocked `values_from` dynamic discovery — only Regional 2 was ever exported | Never add a static `values` list to a group that uses `values_from`. Use `--export-key` to test a single value |
+| Put `config/reports.yaml` in `.gitignore` during a test session | Config changes (slicer formats, key fixes) were never committed — lost on the next clone | Never gitignore the config. Use `--export-key` flag to limit jobs during testing instead of modifying the config |
+| Ran the same store (F103) twice in an "other stores" test | Wasted a test run | Check which stores were already tested before picking the next one |
+| Set `--workers` default to 4 in argparse | User didn't want that — needed two extra commits to revert (one to change, one to revert) | Discuss default values before changing them. Use `git reset --hard` to remove bad commits rather than adding a revert commit |
+| Created a manual JSON config and ran `export_report_pdf.js` directly to test | Bypassed the Python orchestration script — slicers, filter modes, filename templating all skipped | Always use `export_powerbi_to_sharepoint.py` with `--export-key` and `--business-date` for testing |
+
 ## Microsoft API references
 
 - Power BI `ExportTo` starts an async export job and supports `reportLevelFilters`.
