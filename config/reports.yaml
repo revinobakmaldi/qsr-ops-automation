@@ -40,10 +40,6 @@ powerbi_reports:
         page_name: "Operation - Regional"
         filter_templates:
           - "Mapping_Resto_RFID/RegionOperational eq '{value}'"
-        values:
-          - key: "regional_2"
-            label: "REGIONAL 2"
-            value: "REGIONAL 2"
         values_from:
           table: "Mapping_Resto_RFID"
           column: "RegionOperational"
