@@ -196,12 +196,13 @@ def _render_date_filter(date_filter, business_date: str) -> str:
 def _render_date_slicer(date_filter, business_date: str) -> SlicerOverride:
     values = _date_values(business_date)
     raw = values[date_filter.value]
-    # Strip OData datetime wrapper
+    # Strip OData datetime wrapper only — keep the time component.
+    # The browser (UTC+7) converts "2026-05-25T00:00:00" → "2026-05-24T17:00:00.000Z",
+    # which matches how Power BI stores local-midnight dates in UTC. Stripping the
+    # time (leaving "2026-05-25") makes Power BI treat it as UTC midnight instead,
+    # which is 7 hours off and causes the filter to match no rows.
     if raw.startswith("datetime'") and raw.endswith("'"):
         raw = raw[9:-1]
-    # Strip time component to avoid browser UTC timezone conversion
-    if "T" in raw:
-        raw = raw.split("T")[0]
     return SlicerOverride(
         slicer_name=date_filter.slicer_name,
         table=date_filter.table,
