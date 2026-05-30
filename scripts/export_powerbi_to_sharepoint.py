@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -51,6 +52,7 @@ def main() -> None:
         help="Apply filters at report level (default) or page level via pageLevelFilters.",
     )
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel export workers.")
+    parser.add_argument("--render-wait", type=float, default=4.0, help="Seconds to wait after render event before generating PDF. Default 4s; reduce to 2s if no HTML visuals.")
     parser.add_argument("--node-script", default=None, help="Path to capture_slicer_state.js. Required for slicer-based date filtering.")
     parser.add_argument("--debug", action="store_true", help="Print the ExportTo payload before sending.")
     parser.add_argument("--list-values", action="store_true", help="Discover and print actual column values from dataset, then exit.")
@@ -92,7 +94,11 @@ def main() -> None:
     use_puppeteer = pdf_script and pdf_script.exists()
 
     if use_puppeteer:
-        _run_puppeteer_exports(jobs, str(pdf_script), config.sharepoint, sp_token_early)
+        _run_puppeteer_exports(
+            jobs, str(pdf_script), config.sharepoint, sp_token_early,
+            workers=args.workers,
+            render_wait_ms=int(args.render_wait * 1000),
+        )
         return
 
     if args.node_script:
@@ -173,75 +179,99 @@ def eq_filter_to_in(filter_value: str) -> str:
     return f"{prefix} in ({raw_value})"
 
 
-def _run_puppeteer_exports(jobs, pdf_script: str, sharepoint_config, sp_token: str) -> None:
+def _run_puppeteer_exports(
+    jobs, pdf_script: str, sharepoint_config, sp_token: str,
+    workers: int = 1, render_wait_ms: int = 4000,
+) -> None:
     import os
     from report_ops_automation.sharepoint import SharePointClient
 
-    # Group jobs by report
     by_report: dict[str, list] = {}
     for job in jobs:
         by_report.setdefault(job.report.key, []).append(job)
 
+    all_failed: list[str] = []
+
     for report_key, report_jobs in by_report.items():
-        first = report_jobs[0]
-        node_config = {
-            "workspaceId": first.report.workspace_id,
-            "reportId": first.report.report_id,
-            "slicers": [
-                {"table": s.table, "column": s.column, "value": s.value}
-                for s in first.slicer_overrides
-            ],
-            "jobs": [],
-        }
+        n = min(workers, len(report_jobs))
+        chunk_size = math.ceil(len(report_jobs) / n)
+        chunks = [report_jobs[i:i + chunk_size] for i in range(0, len(report_jobs), chunk_size)]
+        print(f"Generating {len(report_jobs)} PDFs via Puppeteer for {report_key} ({n} worker(s))...")
 
-        tmp_files = {}
-        for job in report_jobs:
-            # Parse filters from OData strings back to structured form
-            parsed_filters = []
-            for f in job.filters:
-                # Format: Table/Column eq 'Value'
-                parts = f.split(" eq ")
-                if len(parts) == 2:
-                    table_col = parts[0].strip()
-                    value = parts[1].strip().strip("'")
-                    if "/" in table_col:
-                        table, col = table_col.split("/", 1)
-                        parsed_filters.append({"table": table, "column": col, "values": [value]})
+        def run_chunk(chunk, worker_id):
+            tag = f"[w{worker_id}]"
+            first = chunk[0]
+            node_config = {
+                "workspaceId": first.report.workspace_id,
+                "reportId": first.report.report_id,
+                "renderWait": render_wait_ms,
+                "slicers": [
+                    {"table": s.table, "column": s.column, "value": s.value}
+                    for s in first.slicer_overrides
+                ],
+                "jobs": [],
+            }
 
-            tmp = tempfile.mktemp(suffix=".pdf")
-            tmp_files[job.export_key] = (job, tmp)
-            node_config["jobs"].append({
-                "exportKey": job.export_key,
-                "pageName": job.pages[0]["pageName"] if job.pages else "",
-                "outputFile": tmp,
-                "filters": parsed_filters,
-            })
+            tmp_files = {}
+            for job in chunk:
+                parsed_filters = []
+                for f in job.filters:
+                    parts = f.split(" eq ")
+                    if len(parts) == 2:
+                        table_col = parts[0].strip()
+                        value = parts[1].strip().strip("'")
+                        if "/" in table_col:
+                            table, col = table_col.split("/", 1)
+                            parsed_filters.append({"table": table, "column": col, "values": [value]})
+                tmp = tempfile.mktemp(suffix=".pdf")
+                tmp_files[job.export_key] = (job, tmp)
+                node_config["jobs"].append({
+                    "exportKey": job.export_key,
+                    "pageName": job.pages[0]["pageName"] if job.pages else "",
+                    "outputFile": tmp,
+                    "filters": parsed_filters,
+                })
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(node_config, f)
-            cfg_path = f.name
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                json.dump(node_config, f)
+                cfg_path = f.name
 
-        print(f"Generating {len(report_jobs)} PDFs via Puppeteer for {report_key}...")
-        result = subprocess.run(["node", pdf_script, "--config", cfg_path], capture_output=True, text=True)
+            result = subprocess.run(["node", pdf_script, "--config", cfg_path], capture_output=True, text=True)
+            for line in result.stderr.strip().splitlines():
+                print(f"{tag} {line}")
+            if result.returncode != 0:
+                raise RuntimeError(f"export_report_pdf.js failed (worker {worker_id}):\n{result.stderr}")
 
-        if result.stderr:
-            print(result.stderr.strip())
-        if result.returncode != 0:
-            raise RuntimeError(f"export_report_pdf.js failed:\n{result.stderr}")
+            sp = SharePointClient.from_config(sp_token, sharepoint_config)
+            failed = []
+            for r in json.loads(result.stdout):
+                job, tmp = tmp_files[r["exportKey"]]
+                if r.get("success") and os.path.exists(tmp):
+                    with open(tmp, "rb") as fh:
+                        pdf_bytes = fh.read()
+                    item = sp.upload_file(sp.output_folder, job.output_filename, pdf_bytes)
+                    print(f"{tag} Uploaded {job.output_filename}: {item.get('webUrl', item.get('id'))}")
+                    os.unlink(tmp)
+                else:
+                    print(f"{tag} FAILED {r['exportKey']}: {r.get('error', 'unknown error')}")
+                    failed.append(r["exportKey"])
+            return failed
 
-        results = json.loads(result.stdout)
-        sp = SharePointClient.from_config(sp_token, sharepoint_config)
+        if n == 1:
+            all_failed.extend(run_chunk(chunks[0], 0))
+        else:
+            with ThreadPoolExecutor(max_workers=n) as executor:
+                futures = {executor.submit(run_chunk, chunk, i): i for i, chunk in enumerate(chunks)}
+                for future in as_completed(futures):
+                    worker_id = futures[future]
+                    try:
+                        all_failed.extend(future.result())
+                    except Exception as e:
+                        print(f"[w{worker_id}] crashed: {e}")
+                        all_failed.append(f"worker-{worker_id}-crash")
 
-        for r in results:
-            job, tmp = tmp_files[r["exportKey"]]
-            if r.get("success") and os.path.exists(tmp):
-                with open(tmp, "rb") as fh:
-                    pdf_bytes = fh.read()
-                item = sp.upload_file(sp.output_folder, job.output_filename, pdf_bytes)
-                print(f"Uploaded {job.output_filename}: {item.get('webUrl', item.get('id'))}")
-                os.unlink(tmp)
-            else:
-                print(f"FAILED {r['exportKey']}: {r.get('error', 'unknown error')}")
+    if all_failed:
+        raise RuntimeError(f"{len(all_failed)} job(s) failed: {', '.join(all_failed)}")
 
 
 def _inject_captured_states(jobs, node_script: str):

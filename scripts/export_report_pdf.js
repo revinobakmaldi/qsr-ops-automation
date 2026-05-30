@@ -99,7 +99,7 @@ async function getEmbedInfo(accessToken, workspaceId, reportId) {
 
 // ---------- PDF generation ----------
 
-async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canvasHeight) {
+async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canvasHeight, renderWait) {
   const browser = await puppeteer.launch({
     headless: "new",
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -251,7 +251,7 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
           .catch(() => {});
 
         // Extra wait for HTML visuals and slow content
-        await new Promise((r) => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, renderWait));
 
         // Generate PDF
         const pdfBuffer = await page.pdf({
@@ -308,7 +308,8 @@ async function main() {
     config.slicers || [],
     config.jobs,
     config.canvasWidth || 1280,
-    config.canvasHeight || 720
+    config.canvasHeight || 720,
+    config.renderWait != null ? config.renderWait : 4000
   );
 
   process.stdout.write(JSON.stringify(results) + "\n");
