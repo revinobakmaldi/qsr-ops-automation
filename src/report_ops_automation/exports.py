@@ -214,7 +214,12 @@ def _date_values(business_date: str) -> dict[str, str]:
     parsed = datetime.strptime(business_date, "%Y-%m-%d").date()
     week_number = ((parsed.day - 1) // 7) + 1
     month_label = parsed.strftime("%b")
-    month_date = parsed.replace(day=1).isoformat()
+    # Monthly slicer targets the last completed full month, not the running month
+    if parsed.month == 1:
+        prev_month_first = parsed.replace(year=parsed.year - 1, month=12, day=1)
+    else:
+        prev_month_first = parsed.replace(month=parsed.month - 1, day=1)
+    month_date = prev_month_first.isoformat()
     return {
         "business_date": business_date,
         "business_date_datetime": f"datetime'{business_date}T00:00:00'",
