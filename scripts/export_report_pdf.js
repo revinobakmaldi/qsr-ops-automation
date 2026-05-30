@@ -262,6 +262,10 @@ async function exportJobs(embedInfo, reportId, slicers, jobs, canvasWidth, canva
         // Extra wait for HTML visuals and slow content
         await new Promise((r) => setTimeout(r, renderWait));
 
+        // Debug: screenshot to diagnose whitespace
+        await page.screenshot({ path: `/tmp/debug_${job.exportKey}.png`, clip: { x: 0, y: 0, width: canvasWidth, height: Math.min(600, pdfHeight) } });
+        process.stderr.write(`Screenshot saved: /tmp/debug_${job.exportKey}.png\n`);
+
         // Generate PDF
         const pdfBuffer = await page.pdf({
           width: `${canvasWidth}px`,
